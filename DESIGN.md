@@ -62,9 +62,21 @@ Non-goals:
   - `speed` (`standard` / `fast`), `service_tier`
   - plus `message.model`, `message.id`, `requestId`, `timestamp`, `sessionId`, `isSidechain`, `agentId`.
 - Duplicates:
-  - One response is split over several lines that repeat the same usage.
+  - One response is split over several lines that repeat the usage.
   - Resumed and forked sessions copy earlier records.
   - Deduplicate by `message.id`, falling back to `requestId`.
+  - The copies do not always agree. Some carry zeros or a partial count. In August 2026, 14,621 of 45,506
+    responses in one week had copies that differed, almost all in subagent files. Taking the first copy undercounted
+    that week's output by 44% (27.7 M against 49.5 M). The ledger therefore keeps the largest value of each count
+    per message id.
+- Accounts:
+  - Since September 2026, transcripts contain `type: "attachment"` records with
+    `attachment.type: "credential_org"` and `attachment.organizationUuid`. They name the organization (account)
+    the session's credentials belong to.
+  - One machine can mix several accounts. Each account's weekly limit resets on its own fixed weekly schedule,
+    so limit hits from different accounts fall on different weekdays and times.
+  - Without account attribution, the windows of different accounts overlap and their sums mix the accounts. See
+    §4.1.
 - Effort: found in `type: "api-request-blob"` records as `message.output_config.effort` (for example `xhigh`).
   These records also carry request content, so the reader must extract that one field and nothing else. How a
   blob links to its response is not verified yet (open question).
@@ -131,6 +143,14 @@ Non-goals:
   grouping is needed.
 - Collects limit-hit anchors into `anchors(ts, kind, resets_at)`. `kind` is `weekly` or `session`, and the
   reset time is parsed from the message text with its time zone.
+- Next step: account attribution, which is needed before calibration.
+  - Follow the `credential_org` records through each session file. Tag each response and anchor with a salted
+    hash of the organization.
+  - Subagent and workflow files take the organization of their parent session at the response's time.
+  - Sessions from before such records existed stay "unattributed". Anchors from those sessions can then be used
+    only when no other account was active in the window.
+  - The utilization sampler tags samples the same way. The statusline payload carries the session and its
+    transcript path.
 
 ### 4.2 sample — utilization recorder
 
@@ -269,7 +289,7 @@ ruled out: hand-written JSON and TLS handling is too risky.
 3. How does an `api-request-blob` record (effort) link to its response?
 4. Are small-model side calls really absent from transcripts, and how big are they?
 5. Does the separate weekly Fable limit appear in `rate_limits`, or only in the headers?
-6. Is the weekly window always `resets_at − 7 d`? The first look found one overlapping window (see the private
-   notes).
+6. Is the weekly window always `resets_at − 7 d` per account? The overlaps seen so far are explained by two
+   accounts with fixed weekly schedules. This needs confirming once account attribution exists.
 7. Anthropic's terms on local proxies and on publishing inferred weights.
 8. Final project name.
