@@ -37,4 +37,4 @@ tokens in its own, unpublished way. Learning those weights is the point of this 
 
 ## License
 
-MIT (license file to be added).
+MIT. See [LICENSE](LICENSE).
