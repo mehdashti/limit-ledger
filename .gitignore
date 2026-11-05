@@ -1,0 +1,6 @@
+# Private notes with the owner's own usage numbers
+notes/
+
+# Local data
+*.db
+__pycache__/
