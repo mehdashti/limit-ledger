@@ -68,8 +68,9 @@ func (s Summary) TopModels(n int) string {
 }
 
 // Weekly prints one line per ISO week (UTC) for the last weeks weeks, or for all
-// history when weeks <= 0.
-func Weekly(st *store.Store, w io.Writer, weeks int, now time.Time) error {
+// history when weeks <= 0. With byAccount, each week is split by the account that
+// was active.
+func Weekly(st *store.Store, w io.Writer, weeks int, now time.Time, byAccount bool) error {
 	from := int64(0)
 	if weeks > 0 {
 		from = isoWeekStart(now.UTC()).AddDate(0, 0, -7*(weeks-1)).UnixMilli()
@@ -79,6 +80,7 @@ func Weekly(st *store.Store, w io.Writer, weeks int, now time.Time) error {
 		return err
 	}
 	byWeek := map[string][]store.Group{}
+	weekStart := map[string]time.Time{}
 	var keys []string
 	for _, g := range days {
 		d, err := time.Parse("2006-01-02", g.Day)
@@ -89,17 +91,57 @@ func Weekly(st *store.Store, w io.Writer, weeks int, now time.Time) error {
 		k := fmt.Sprintf("%d-W%02d", y, wk)
 		if _, ok := byWeek[k]; !ok {
 			keys = append(keys, k)
+			weekStart[k] = isoWeekStart(d)
 		}
 		byWeek[k] = append(byWeek[k], g)
 	}
 	sort.Strings(keys)
+	var (
+		names accountNames
+		segs  []store.Segment
+	)
+	if byAccount {
+		if names, _, err = loadNames(st); err != nil {
+			return err
+		}
+		if segs, err = st.Timeline(); err != nil {
+			return err
+		}
+	}
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', tabwriter.AlignRight)
-	fmt.Fprintln(tw, "week\trequests\tinput\tcache write\tcache read\toutput\tAPI-equiv $\t")
-	for _, k := range keys {
-		s := Summarize(byWeek[k])
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t  %s\n", k, Thousands(float64(s.Requests)),
+	head := "week\trequests\tinput\tcache write\tcache read\toutput\tAPI-equiv $\t"
+	if byAccount {
+		head = "week\taccount\trequests\tinput\tcache write\tcache read\toutput\tAPI-equiv $\t"
+	}
+	fmt.Fprintln(tw, head)
+	row := func(prefix string, s Summary) {
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t  %s\n", prefix, Thousands(float64(s.Requests)),
 			Tokens(s.Input), Tokens(s.Cache5m+s.Cache1h), Tokens(s.CacheRead), Tokens(s.Output),
 			Thousands(s.Dollars), s.TopModels(2))
+	}
+	for _, k := range keys {
+		if !byAccount {
+			row(k, Summarize(byWeek[k]))
+			continue
+		}
+		ws := weekStart[k]
+		by, err := usageBy(st, segs, ws.UnixMilli(), ws.AddDate(0, 0, 7).UnixMilli())
+		if err != nil {
+			return err
+		}
+		accts := make([]string, 0, len(by))
+		for a := range by {
+			accts = append(accts, a)
+		}
+		sort.Slice(accts, func(i, j int) bool {
+			if (accts[i] == "") != (accts[j] == "") {
+				return accts[j] == "" // unknown last
+			}
+			return names.of(accts[i]) < names.of(accts[j])
+		})
+		for _, a := range accts {
+			row(k+"\t"+names.of(a), by[a])
+		}
 	}
 	if err := tw.Flush(); err != nil {
 		return err
@@ -112,45 +154,69 @@ func Weekly(st *store.Store, w io.Writer, weeks int, now time.Time) error {
 // Anchors prints, for every weekly-limit hit, what was used from the start of that
 // window up to the hit: the whole weekly budget in that week.
 func Anchors(st *store.Store, w io.Writer) error {
-	all, err := st.Anchors("weekly")
+	names, _, err := loadNames(st)
 	if err != nil {
 		return err
 	}
-	// Keep the earliest hit per reset time.
-	var hits []transcript.Anchor
-	for _, a := range all {
-		if n := len(hits); n > 0 && hits[n-1].Resets == a.Resets {
-			continue
-		}
-		hits = append(hits, a)
+	segs, err := st.Timeline()
+	if err != nil {
+		return err
+	}
+	hits, err := weeklyHits(st, segs)
+	if err != nil {
+		return err
 	}
 	if len(hits) == 0 {
 		fmt.Fprintln(w, "No weekly-limit hits found in the transcripts.")
 		return nil
 	}
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "hit (UTC)\tresets (UTC)\trequests\toutput\tcache read\tAPI-equiv $\tmodels\tnote")
-	var prevReset int64
-	for _, a := range hits {
-		start := a.Resets - 7*24*int64(time.Hour/time.Millisecond)
-		groups, err := st.Totals(start, a.Hit)
+	fmt.Fprintln(tw, "hit (UTC)\tresets (UTC)\taccount\trequests\toutput\tcache read\tAPI-equiv $\tmodels\tnote")
+	for _, h := range hits {
+		start := h.resets - 7*24*int64(time.Hour/time.Millisecond)
+		by, err := usageBy(st, segs, start, h.hit)
 		if err != nil {
 			return err
 		}
-		s := Summarize(groups)
-		note := ""
-		if prevReset > start {
-			note = "overlaps previous window"
+		var s Summary
+		var notes []string
+		if h.account == "" {
+			// Account unknown: all usage in the window, from whichever account.
+			all, err := st.Totals(start, h.hit)
+			if err != nil {
+				return err
+			}
+			s = Summarize(all)
+			notes = append(notes, "account unknown: sums every account")
+		} else {
+			s = by[h.account]
+			lo, hi, err := switchRange(st, segs, h.account, start, h.hit)
+			if err != nil {
+				return err
+			}
+			if lo > 0 || hi > 0 {
+				notes = append(notes, fmt.Sprintf("switch uncertainty: $%s–$%s",
+					Thousands(s.Dollars-lo), Thousands(s.Dollars+hi)))
+			}
+			if u := by[""]; u.Requests > 0 {
+				notes = append(notes, fmt.Sprintf("lower bound: $%s before account records", Thousands(u.Dollars)))
+			}
+			for acct, o := range by {
+				if acct != "" && acct != h.account && o.Requests > 0 {
+					notes = append(notes, fmt.Sprintf("%s used $%s meanwhile", names.of(acct), Thousands(o.Dollars)))
+				}
+			}
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", stamp(a.Hit), stamp(a.Resets),
+		sort.Strings(notes)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", stamp(h.hit), stamp(h.resets), names.of(h.account),
 			Thousands(float64(s.Requests)), Tokens(s.Output), Tokens(s.CacheRead), Thousands(s.Dollars),
-			s.TopModels(2), note)
-		prevReset = a.Resets
+			s.TopModels(2), strings.Join(notes, "; "))
 	}
 	if err := tw.Flush(); err != nil {
 		return err
 	}
-	fmt.Fprintln(w, "\nEach row sums usage from (reset - 7 days) to the hit, when the weekly limit was at 100%.")
+	fmt.Fprintln(w, "\nEach row sums the hitting account's usage from (reset - 7 days) to the hit, when its weekly")
+	fmt.Fprintln(w, "limit was at 100%. The account active at each moment comes from Claude Code's credential_org records.")
 	return nil
 }
 

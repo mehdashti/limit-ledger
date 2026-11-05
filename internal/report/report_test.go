@@ -2,6 +2,7 @@ package report
 
 import (
 	"bytes"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -63,6 +64,85 @@ func TestAnchorsWindow(t *testing.T) {
 	// Two responses in the window, 2M output tokens, $40 at Opus 5.5 output price.
 	if !strings.Contains(text, "2.0M") || !strings.Contains(text, "opus-5-5 $40") {
 		t.Errorf("window sums wrong:\n%s", text)
+	}
+}
+
+func TestAnchorsPerAccount(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "ledger.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	b, err := st.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	put := func(ts string) {
+		n++
+		r := &transcript.Response{MsgID: fmt.Sprint("m", n), TS: ms(ts), Model: "claude-opus-5-5", Kind: "main",
+			Tokens: transcript.Tokens{Output: 1_000_000}} // $20 each
+		if err := b.PutResponse(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ev := func(ts, org string) {
+		if err := b.PutOrgEvent(&transcript.OrgEvent{TS: ms(ts), Org: org, SessionID: ts}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Window of the hit: 2026-10-06T07:00Z .. hit 2026-10-12T16:23Z.
+	put("2026-10-06T08:00:00Z") // before any account record: unknown
+	ev("2026-10-07T00:00:00Z", "org-a")
+	put("2026-10-07T01:00:00Z") // A
+	ev("2026-10-08T00:00:00Z", "org-b")
+	put("2026-10-08T01:00:00Z") // B
+	ev("2026-10-09T00:00:00Z", "org-a")
+	put("2026-10-09T01:00:00Z") // A
+	if err := b.PutAnchor(&transcript.Anchor{Kind: "weekly", Hit: ms("2026-10-12T16:23:00Z"),
+		Resets: ms("2026-10-13T07:00:00Z")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	la, lb := "A", "B"
+	if _, err := st.SetAccount(st.AccountKey("org-a"), &la, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.SetAccount(st.AccountKey("org-b"), &lb, nil); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := Anchors(st, &out); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	for _, want := range []string{"  A  ", "2.0M", "opus-5-5 $40", "B used $20 meanwhile", "lower bound: $20 before account records",
+		"switch uncertainty: $20–$60"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q in:\n%s", want, text)
+		}
+	}
+
+	out.Reset()
+	if err := Weekly(st, &out, 0, time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC), true); err != nil {
+		t.Fatal(err)
+	}
+	text = out.String()
+	// ISO week 2026-W41 holds all four responses: A twice, B once, unknown once.
+	for _, want := range []string{"2026-W41  A", "2026-W41  B", "2026-W41  unknown"} {
+		if !strings.Contains(strings.Join(strings.Fields(text), "  "), strings.Join(strings.Fields(want), "  ")) {
+			t.Errorf("missing %q in:\n%s", want, text)
+		}
+	}
+
+	out.Reset()
+	if err := Accounts(st, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Tue 07:00 ×1") {
+		t.Errorf("schedule not attributed to A:\n%s", out.String())
 	}
 }
 

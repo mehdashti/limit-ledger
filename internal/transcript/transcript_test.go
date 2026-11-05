@@ -94,6 +94,27 @@ func TestParseSyntheticAnchor(t *testing.T) {
 	}
 }
 
+func TestParseCredentialOrg(t *testing.T) {
+	line := `{"parentUuid":"p","isSidechain":true,"type":"attachment","sessionId":"sess-1",` +
+		`"timestamp":"2026-10-12T16:23:30.000Z","attachment":{"type":"credential_org","organizationUuid":"org-123"}}`
+	res, err := ParseLine([]byte(line), "subagent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := res.Org
+	if e == nil || e.Org != "org-123" || e.SessionID != "sess-1" ||
+		e.TS != time.Date(2026, 10, 12, 16, 23, 30, 0, time.UTC).UnixMilli() {
+		t.Fatalf("got %+v", e)
+	}
+	// The marker inside an ordinary assistant response must not hide the response.
+	mention := `{"type":"assistant","timestamp":"2026-11-03T10:00:00Z","message":{"id":"m9","model":"claude-opus-5-5",` +
+		`"content":[{"type":"text","text":"credential_org"}],"usage":{"output_tokens":3}}}`
+	res, err = ParseLine([]byte(mention), "main")
+	if err != nil || res.Org != nil || res.Response == nil || res.Response.Output != 3 {
+		t.Fatalf("mention: %+v %v", res, err)
+	}
+}
+
 func TestKindFromPath(t *testing.T) {
 	for rel, want := range map[string]string{
 		"proj/abc.jsonl":                                  "main",

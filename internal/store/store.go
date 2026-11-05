@@ -17,9 +17,10 @@ import (
 	_ "modernc.org/sqlite" // pure-Go SQLite driver, no cgo
 )
 
-const schemaVersion = 1
+// migrations[i] takes the schema from version i to i+1.
+var migrations = []string{schemaV1, schemaV2}
 
-const schema = `
+const schemaV1 = `
 CREATE TABLE responses (
 	msg_id     TEXT PRIMARY KEY,
 	ts         INTEGER NOT NULL,
@@ -58,6 +59,25 @@ CREATE TABLE meta (
 	key   TEXT PRIMARY KEY,
 	value TEXT NOT NULL
 ) WITHOUT ROWID;
+`
+
+// schemaV2 adds accounts. Version 1 did not read credential_org records, so every
+// file is read again from the start; responses are upserts, so nothing is counted twice.
+const schemaV2 = `
+CREATE TABLE org_events (
+	ts          INTEGER NOT NULL,
+	account     TEXT NOT NULL,
+	session_key TEXT NOT NULL,
+	PRIMARY KEY (ts, account, session_key)
+) WITHOUT ROWID;
+
+CREATE TABLE accounts (
+	account TEXT PRIMARY KEY,
+	label   TEXT NOT NULL DEFAULT '',
+	plan    TEXT NOT NULL DEFAULT ''
+) WITHOUT ROWID;
+
+DELETE FROM files;
 `
 
 // Store is an open ledger database.
@@ -107,24 +127,27 @@ func (s *Store) migrate() error {
 	if err := s.db.QueryRow("PRAGMA user_version").Scan(&v); err != nil {
 		return err
 	}
-	switch {
-	case v == schemaVersion:
-		return nil
-	case v > schemaVersion:
-		return fmt.Errorf("database schema %d is newer than this build (%d)", v, schemaVersion)
+	if v > len(migrations) {
+		return fmt.Errorf("database schema %d is newer than this build (%d)", v, len(migrations))
 	}
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
+	for ; v < len(migrations); v++ {
+		tx, err := s.db.Begin()
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(migrations[v]); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("migration to schema %d: %w", v+1, err)
+		}
+		if _, err := tx.Exec(fmt.Sprintf("PRAGMA user_version=%d", v+1)); err != nil {
+			tx.Rollback()
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
 	}
-	defer tx.Rollback()
-	if _, err := tx.Exec(schema); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(fmt.Sprintf("PRAGMA user_version=%d", schemaVersion)); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return nil
 }
 
 func (s *Store) loadSalt() error {
@@ -149,6 +172,17 @@ func (s *Store) loadSalt() error {
 func (s *Store) PathKey(rel string) string {
 	h := sha256.Sum256([]byte(s.salt + "\x00" + filepath.ToSlash(rel)))
 	return hex.EncodeToString(h[:16])
+}
+
+// AccountKey is the stored identity of an organization: a salted hash of its UUID.
+func (s *Store) AccountKey(org string) string { return s.key("org", org, 6) }
+
+// SessionKey is the stored identity of a session id.
+func (s *Store) SessionKey(id string) string { return s.key("session", id, 8) }
+
+func (s *Store) key(kind, v string, n int) string {
+	h := sha256.Sum256([]byte(s.salt + "\x00" + kind + "\x00" + v))
+	return hex.EncodeToString(h[:n])
 }
 
 // FileState is how far a transcript file has been read.
@@ -180,8 +214,10 @@ func (s *Store) FileStates() (map[string]FileState, error) {
 
 // Batch is one write transaction.
 type Batch struct {
+	st                   *Store
 	tx                   *sql.Tx
 	resp, anchor, fileSt *sql.Stmt
+	orgEv, account       *sql.Stmt
 }
 
 const upsertResponse = `
@@ -206,13 +242,15 @@ func (s *Store) Begin() (*Batch, error) {
 	if err != nil {
 		return nil, err
 	}
-	b := &Batch{tx: tx}
+	b := &Batch{st: s, tx: tx}
 	for _, p := range []struct {
 		dst **sql.Stmt
 		sql string
 	}{
 		{&b.resp, upsertResponse},
 		{&b.anchor, "INSERT OR IGNORE INTO anchors(kind, hit_ts, resets_ts) VALUES(?,?,?)"},
+		{&b.orgEv, "INSERT OR IGNORE INTO org_events(ts, account, session_key) VALUES(?,?,?)"},
+		{&b.account, "INSERT OR IGNORE INTO accounts(account) VALUES(?)"},
 		{&b.fileSt, `INSERT INTO files(path_key, dev, ino, size, offset, mtime) VALUES(?,?,?,?,?,?)
 			ON CONFLICT(path_key) DO UPDATE SET dev=excluded.dev, ino=excluded.ino,
 			size=excluded.size, offset=excluded.offset, mtime=excluded.mtime`},
@@ -242,6 +280,17 @@ func (b *Batch) PutResponse(r *transcript.Response) error {
 // PutAnchor inserts a limit anchor once.
 func (b *Batch) PutAnchor(a *transcript.Anchor) error {
 	_, err := b.anchor.Exec(a.Kind, a.Hit, a.Resets)
+	return err
+}
+
+// PutOrgEvent records which account was active at a moment. Only salted hashes of
+// the organization and session are stored.
+func (b *Batch) PutOrgEvent(e *transcript.OrgEvent) error {
+	acct := b.st.AccountKey(e.Org)
+	if _, err := b.orgEv.Exec(e.TS, acct, b.st.SessionKey(e.SessionID)); err != nil {
+		return err
+	}
+	_, err := b.account.Exec(acct)
 	return err
 }
 

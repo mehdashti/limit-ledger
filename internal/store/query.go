@@ -44,10 +44,10 @@ func (s *Store) Daily(fromMs, toMs int64) ([]Group, error) {
 	return out, rows.Err()
 }
 
-// Totals returns sums per model and speed for fromMs <= ts <= toMs.
+// Totals returns sums per model and speed for fromMs <= ts < toMs.
 func (s *Store) Totals(fromMs, toMs int64) ([]Group, error) {
 	rows, err := s.db.Query(`SELECT model, speed, `+sums+`
-		FROM responses WHERE ts >= ? AND ts <= ? GROUP BY 1, 2`, fromMs, toMs)
+		FROM responses WHERE ts >= ? AND ts < ? GROUP BY 1, 2`, fromMs, toMs)
 	if err != nil {
 		return nil, err
 	}

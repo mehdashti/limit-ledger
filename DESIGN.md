@@ -75,6 +75,8 @@ Non-goals:
     the session's credentials belong to.
   - One machine can mix several accounts. Each account's weekly limit resets on its own fixed weekly schedule,
     so limit hits from different accounts fall on different weekdays and times.
+  - Most of these records are in subagent files, written as the subagent starts. Few main session files carry
+    one.
   - Without account attribution, the windows of different accounts overlap and their sums mix the accounts. See
     §4.1.
 - Effort: found in `type: "api-request-blob"` records as `message.output_config.effort` (for example `xhigh`).
@@ -143,14 +145,20 @@ Non-goals:
   grouping is needed.
 - Collects limit-hit anchors into `anchors(ts, kind, resets_at)`. `kind` is `weekly` or `session`, and the
   reset time is parsed from the message text with its time zone.
-- Next step: account attribution, which is needed before calibration.
-  - Follow the `credential_org` records through each session file. Tag each response and anchor with a salted
-    hash of the organization.
-  - Subagent and workflow files take the organization of their parent session at the response's time.
-  - Sessions from before such records existed stay "unattributed". Anchors from those sessions can then be used
-    only when no other account was active in the window.
-  - The utilization sampler tags samples the same way. The statusline payload carries the session and its
-    transcript path.
+- Account attribution (implemented, schema v2):
+  - Every `credential_org` record becomes an `org_events(ts, account, session_key)` row. Only salted hashes of
+    the organization and the session are stored.
+  - One configuration directory holds one set of credentials, so one account is active at a time on the
+    machine. The ledger builds a machine-wide timeline: a new stretch starts at the first record that names a
+    different account. On real data, the records fall into clean, non-overlapping stretches.
+  - Time before the first record is account `""` (unknown).
+  - A limit hit belongs to the account active just before it.
+  - A switch really happened somewhere between the last record of the old account and the first record of the
+    new one. Most records sit in subagent files, written when a subagent starts, so that gap can be wide. The
+    anchor report shows the resulting range ("switch uncertainty").
+  - `limit-ledger accounts` lists accounts with their stretches, attributed hits and reset schedule. `accounts
+    set KEY --label --plan` names them. The plan is needed for shared tables.
+  - The utilization sampler will tag samples by the same timeline.
 
 ### 4.2 sample — utilization recorder
 

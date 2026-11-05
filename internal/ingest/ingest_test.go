@@ -191,3 +191,38 @@ func TestMissingRoot(t *testing.T) {
 		t.Error("missing projects directory should be an error")
 	}
 }
+
+func TestIngestAccountRecords(t *testing.T) {
+	root := t.TempDir()
+	st, err := store.Open(filepath.Join(t.TempDir(), "ledger.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	org := func(ts, uuid string) string {
+		return fmt.Sprintf(`{"type":"attachment","sessionId":"s","timestamp":%q,`+
+			`"attachment":{"type":"credential_org","organizationUuid":%q}}`, ts, uuid) + "\n"
+	}
+	writeFile(t, filepath.Join(root, "p", "s", "subagents", "agent-1.jsonl"),
+		org("2026-10-07T00:00:00Z", "org-a"), resp("m1", "2026-10-07T00:01:00Z", "claude-opus-5-5", 1, 1)+"\n")
+	writeFile(t, filepath.Join(root, "p", "t", "subagents", "agent-2.jsonl"),
+		org("2026-10-08T00:00:00Z", "org-b"), org("2026-10-08T00:00:00Z", "org-b"))
+	stats, err := Run(st, Options{Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.OrgEvents != 3 {
+		t.Errorf("account records parsed: %d want 3", stats.OrgEvents)
+	}
+	segs, err := st.Timeline()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(segs) != 3 || segs[1].Account != st.AccountKey("org-a") || segs[2].Account != st.AccountKey("org-b") {
+		t.Errorf("timeline %+v", segs)
+	}
+	accts, err := st.Accounts()
+	if err != nil || len(accts) != 2 {
+		t.Errorf("accounts %+v %v", accts, err)
+	}
+}

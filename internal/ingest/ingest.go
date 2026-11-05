@@ -34,6 +34,7 @@ type Stats struct {
 	Lines       int64
 	Responses   int64 // response records parsed (before de-duplication)
 	Anchors     int64
+	OrgEvents   int64 // credential_org records: which account was active
 	ParseErrors int64
 	Elapsed     time.Duration
 }
@@ -51,6 +52,7 @@ type result struct {
 	parseErrors int64
 	responses   []*transcript.Response
 	anchors     []*transcript.Anchor
+	orgs        []*transcript.OrgEvent
 	err         error
 }
 
@@ -185,6 +187,7 @@ func write(st *store.Store, resCh <-chan result, stats *Stats) error {
 		stats.Lines += r.lines
 		stats.Responses += int64(len(r.responses))
 		stats.Anchors += int64(len(r.anchors))
+		stats.OrgEvents += int64(len(r.orgs))
 		stats.ParseErrors += r.parseErrors
 		rows += len(r.responses)
 		nf++
@@ -220,6 +223,11 @@ func apply(b *store.Batch, r result) error {
 			return err
 		}
 	}
+	for _, e := range r.orgs {
+		if err := b.PutOrgEvent(e); err != nil {
+			return err
+		}
+	}
 	s := r.job.state
 	s.Offset = r.offset
 	return b.PutFile(r.job.key, s)
@@ -252,6 +260,9 @@ func readFile(j job) result {
 		}
 		if out.Anchor != nil {
 			res.anchors = append(res.anchors, out.Anchor)
+		}
+		if out.Org != nil {
+			res.orgs = append(res.orgs, out.Org)
 		}
 	})
 	res.offset = j.from + consumed

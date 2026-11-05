@@ -54,17 +54,37 @@ type Anchor struct {
 	Resets int64  // Unix milliseconds
 }
 
-// Result is what one line yielded. Both fields may be nil.
+// OrgEvent records which organization (account) a session's credentials belonged to
+// at a moment. Claude Code writes these as "credential_org" attachments.
+type OrgEvent struct {
+	TS        int64  // Unix milliseconds
+	Org       string // organization UUID; the store keeps only a salted hash of it
+	SessionID string
+}
+
+// Result is what one line yielded. All fields may be nil.
 type Result struct {
 	Response *Response
 	Anchor   *Anchor
+	Org      *OrgEvent
 }
 
 var (
 	markAssistant = []byte(`"assistant"`)
 	markUsage     = []byte(`"usage"`)
 	markSynthetic = []byte(`"<synthetic>"`)
+	markCredOrg   = []byte(`"credential_org"`)
 )
+
+type rawOrg struct {
+	Type       string `json:"type"`
+	Timestamp  string `json:"timestamp"`
+	SessionID  string `json:"sessionId"`
+	Attachment *struct {
+		Type             string `json:"type"`
+		OrganizationUUID string `json:"organizationUuid"`
+	} `json:"attachment"`
+}
 
 type rawRecord struct {
 	Type        string      `json:"type"`
@@ -124,6 +144,13 @@ func KindFromPath(rel string) string {
 // ParseLine extracts a response or an anchor from one JSONL line. Lines that carry
 // neither return an empty Result and no error. kind is stored on responses.
 func ParseLine(line []byte, kind string) (Result, error) {
+	if bytes.Contains(line, markCredOrg) {
+		// The marker can also appear inside ordinary text, so only a real attachment
+		// record counts; anything else falls through to the normal checks.
+		if ev, err := parseOrg(line); err != nil || ev != nil {
+			return Result{Org: ev}, err
+		}
+	}
 	if !bytes.Contains(line, markAssistant) {
 		return Result{}, nil
 	}
@@ -188,6 +215,22 @@ func parseResponse(line []byte, kind string) (*Response, error) {
 		r.WebFetch = s.WebFetchRequests
 	}
 	return r, nil
+}
+
+func parseOrg(line []byte) (*OrgEvent, error) {
+	var rec rawOrg
+	if err := json.Unmarshal(line, &rec); err != nil {
+		return nil, nil // not a clean attachment record; let the other checks decide
+	}
+	a := rec.Attachment
+	if rec.Type != "attachment" || a == nil || a.Type != "credential_org" || a.OrganizationUUID == "" {
+		return nil, nil
+	}
+	ts, err := time.Parse(time.RFC3339Nano, rec.Timestamp)
+	if err != nil {
+		return nil, err
+	}
+	return &OrgEvent{TS: ts.UnixMilli(), Org: a.OrganizationUUID, SessionID: rec.SessionID}, nil
 }
 
 func parseSynthetic(line []byte) (*Anchor, error) {
