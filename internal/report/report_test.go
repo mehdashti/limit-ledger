@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mehdashti/limit-ledger/internal/sample"
 	"github.com/mehdashti/limit-ledger/internal/store"
 	"github.com/mehdashti/limit-ledger/internal/transcript"
 )
@@ -159,5 +160,58 @@ func TestFormatting(t *testing.T) {
 	}
 	if got := isoWeekStart(time.Date(2026, 11, 5, 15, 0, 0, 0, time.UTC)); !got.Equal(time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC)) {
 		t.Errorf("iso week start %v", got)
+	}
+}
+
+func TestWindowsPerPercent(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "ledger.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	b, err := st.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.PutOrgEvent(&transcript.OrgEvent{TS: ms("2026-11-02T00:00:00Z"), Org: "org-b", SessionID: "s"}); err != nil {
+		t.Fatal(err)
+	}
+	reset := ms("2026-11-08T22:00:00Z")
+	samp := func(ts string, pct float64) {
+		p, r := pct, reset
+		if err := b.PutSample(sample.Sample{TS: ms(ts), SessionID: "s", SevenPct: &p, SevenReset: &r}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	samp("2026-11-03T00:00:00Z", 20)
+	samp("2026-11-04T00:00:00Z", 30)
+	// 10 points of the weekly figure, with $200 of Opus 5.5 output in between.
+	for i, ts := range []string{"2026-11-03T06:00:00Z", "2026-11-03T12:00:00Z"} {
+		if err := b.PutResponse(&transcript.Response{MsgID: fmt.Sprint("w", i), TS: ms(ts), Model: "claude-opus-5-5",
+			Kind: "main", Tokens: transcript.Tokens{Output: 5_000_000}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := b.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	wins, err := Windows(st)
+	if err != nil || len(wins) != 1 {
+		t.Fatalf("windows %+v %v", wins, err)
+	}
+	w := wins[0]
+	if w.Account != st.AccountKey("org-b") || w.Samples != 2 || w.DeltaPercent != 10 {
+		t.Errorf("window %+v", w)
+	}
+	d, o, ok := w.PerPercent()
+	if !ok || d != 20 || o != 1_000_000 {
+		t.Errorf("per percent: $%v, %v output, %v", d, o, ok)
+	}
+	var out bytes.Buffer
+	if err := WindowsReport(st, &out, time.UTC); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "$20.0") || !strings.Contains(out.String(), "20.0 → 30.0") {
+		t.Errorf("report:\n%s", out.String())
 	}
 }

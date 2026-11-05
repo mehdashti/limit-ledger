@@ -5,8 +5,10 @@ utilization figures what one percent of the weekly limit is worth, and it report
 
 **Unofficial.** Not affiliated with or endorsed by Anthropic. All weights and budgets it reports are estimates.
 
-Status: early development. Milestone M1 works: it reads transcripts, attributes usage to accounts, and prints
-weekly and limit-hit reports.
+Status: early development. M1 and M2 work:
+- reading transcripts and attributing usage to accounts;
+- weekly and limit-hit reports;
+- recording the weekly percentage through a statusline hook.
 Calibration and change detection are next. See [DESIGN.md](DESIGN.md).
 
 ## Privacy
@@ -34,7 +36,22 @@ limit-ledger report anchors    # usage in each weekly window up to the moment th
 limit-ledger accounts          # accounts seen on this machine, their stretches and reset schedules
 limit-ledger accounts set KEY --label work --plan max   # name an account
 limit-ledger report weekly --by-account
+
+limit-ledger statusline install   # record the weekly % that Claude Code shows (see below)
+limit-ledger report windows       # weekly % against local usage: API-equivalent $ and output per 1%
+limit-ledger statusline uninstall # put the previous statusline back
 ```
+
+### The statusline hook
+
+On every statusline refresh, Claude Code passes its statusline command the current 5-hour and weekly
+utilization. It already received these figures with its last API response. `statusline install` points
+`statusLine` in `~/.claude/settings.json` at `limit-ledger statusline`. It keeps a backup of the file, and it
+keeps showing any statusline you already had. The hook appends one line to a local spool file and makes no
+network request. `ingest` moves the spool into the ledger.
+
+Install from a stable location (for example `go install ./cmd/limit-ledger`), because the settings file stores
+the binary's path.
 
 If you switch between several accounts, the ledger works out which one was active at each moment from Claude
 Code's `credential_org` records, which exist since about September 2026. It stores only salted hashes of account

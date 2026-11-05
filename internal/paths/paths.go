@@ -39,6 +39,33 @@ func DefaultDB() (string, error) {
 	return filepath.Join(d, "ledger.db"), nil
 }
 
+// Spool is the file the statusline hook appends samples to.
+func Spool() (string, error) {
+	d, err := DataDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(d, "samples.jsonl"), nil
+}
+
+// Chain is the file that remembers the statusline configured before limit-ledger's.
+func Chain() (string, error) {
+	d, err := DataDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(d, "statusline-chain.json"), nil
+}
+
+// ClaudeSettings is Claude Code's user settings file.
+func ClaudeSettings() (string, error) {
+	d, err := ClaudeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(d, "settings.json"), nil
+}
+
 // ClaudeDir is Claude Code's configuration directory. CLAUDE_CONFIG_DIR overrides it.
 func ClaudeDir() (string, error) {
 	if d := os.Getenv("CLAUDE_CONFIG_DIR"); d != "" {

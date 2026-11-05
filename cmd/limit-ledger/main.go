@@ -3,11 +3,13 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -16,6 +18,8 @@ import (
 	"github.com/mehdashti/limit-ledger/internal/ingest"
 	"github.com/mehdashti/limit-ledger/internal/paths"
 	"github.com/mehdashti/limit-ledger/internal/report"
+	"github.com/mehdashti/limit-ledger/internal/sample"
+	"github.com/mehdashti/limit-ledger/internal/settings"
 	"github.com/mehdashti/limit-ledger/internal/store"
 )
 
@@ -27,9 +31,14 @@ Usage:
   limit-ledger ingest          [--db PATH] [--projects DIR] [--workers N]
   limit-ledger report weekly   [--db PATH] [--weeks N] [--by-account]
   limit-ledger report anchors  [--db PATH]
+  limit-ledger report windows  [--db PATH]
   limit-ledger accounts        [--db PATH]
   limit-ledger accounts set KEY [--label NAME] [--plan PLAN] [--db PATH]
+  limit-ledger statusline install | uninstall | status
   limit-ledger version
+
+The statusline hook (installed with "statusline install") records the weekly and 5-hour
+utilization that Claude Code shows, without any request of its own.
 
 ingest reads Claude Code transcripts (usage fields only) into a local database.
 The first run reads all history; later runs read what was appended.
@@ -63,6 +72,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 			return usageError{"report needs weekly or anchors"}
 		}
 		return cmdReport(args[1], args[2:], stdout, stderr)
+	case "statusline":
+		return cmdStatusline(args[1:], os.Stdin, stdout, stderr)
 	case "accounts":
 		return cmdAccounts(args[1:], stdout, stderr)
 	case "version", "--version":
@@ -96,11 +107,18 @@ func cmdIngest(args []string, stdout, stderr io.Writer) error {
 	}
 	defer st.Close()
 	stats, err := ingest.Run(st, ingest.Options{Root: *projects, Workers: *workers})
+	var ss ingest.SampleStats
+	if spool, perr := paths.Spool(); perr == nil && err == nil {
+		ss, err = ingest.Samples(st, spool)
+	}
 	resp, anchors, files, cerr := st.Counts()
 	fmt.Fprintf(stdout, "read %d of %d files, %.1f MB, %d lines in %s\n",
 		stats.FilesRead, stats.Files, float64(stats.Bytes)/1e6, stats.Lines, stats.Elapsed.Round(time.Millisecond))
 	fmt.Fprintf(stdout, "parsed %d response records, %d limit anchors, %d account records, %d unparsable lines\n",
 		stats.Responses, stats.Anchors, stats.OrgEvents, stats.ParseErrors)
+	if ss.Read > 0 {
+		fmt.Fprintf(stdout, "statusline samples: %d new, %d kept\n", ss.Read, ss.Kept)
+	}
 	if cerr == nil {
 		fmt.Fprintf(stdout, "ledger now holds %d unique responses, %d anchors, %d files (%s)\n",
 			resp, anchors, files, *db)
@@ -127,6 +145,8 @@ func cmdReport(which string, args []string, stdout, stderr io.Writer) error {
 		return report.Weekly(st, stdout, *weeks, time.Now(), *byAccount)
 	case "anchors":
 		return report.Anchors(st, stdout)
+	case "windows":
+		return report.WindowsReport(st, stdout, time.Local)
 	}
 	return usageError{"unknown report " + which}
 }
@@ -188,4 +208,101 @@ func cmdAccounts(args []string, stdout, stderr io.Writer) error {
 	}
 	fmt.Fprintln(stdout, "updated account", full)
 	return nil
+}
+
+func cmdStatusline(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
+	if len(args) == 0 {
+		hook(stdin, stdout)
+		return nil
+	}
+	settingsPath, err := paths.ClaudeSettings()
+	if err != nil {
+		return err
+	}
+	chain, err := paths.Chain()
+	if err != nil {
+		return err
+	}
+	switch args[0] {
+	case "install":
+		exe, err := os.Executable()
+		if err != nil {
+			return err
+		}
+		if exe, err = filepath.EvalSymlinks(exe); err != nil {
+			return err
+		}
+		if strings.Contains(exe, "go-build") {
+			return fmt.Errorf("refusing to install a temporary binary (%s); build limit-ledger first", exe)
+		}
+		backup, err := settings.Install(settingsPath, chain, exe, time.Now())
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "statusline set to %s in %s\n", settings.HookCommand(exe), settingsPath)
+		if backup != "" {
+			fmt.Fprintln(stdout, "backup of the previous file:", backup)
+		}
+		if prev := sample.LoadChain(chain).Previous; len(prev) > 0 {
+			fmt.Fprintln(stdout, "your previous statusline is kept and still shown")
+		}
+		return nil
+	case "uninstall":
+		backup, err := settings.Uninstall(settingsPath, chain, time.Now())
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(stdout, "statusline restored in", settingsPath)
+		fmt.Fprintln(stdout, "backup of the previous file:", backup)
+		return nil
+	case "status":
+		b, err := os.ReadFile(settingsPath)
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		o, err := settings.Parse(b)
+		if err != nil {
+			return err
+		}
+		cur, ok := o.Get("statusLine")
+		switch {
+		case ok && settings.IsOurs(cur):
+			fmt.Fprintln(stdout, "installed:", string(cur))
+		case ok:
+			fmt.Fprintln(stdout, "not installed; another statusline is configured:", string(cur))
+		default:
+			fmt.Fprintln(stdout, "not installed")
+		}
+		if spool, err := paths.Spool(); err == nil {
+			if fi, err := os.Stat(spool); err == nil {
+				fmt.Fprintf(stdout, "spool: %s (%d bytes, last write %s)\n", spool, fi.Size(), fi.ModTime().Format(time.RFC3339))
+			} else {
+				fmt.Fprintln(stdout, "spool: no samples recorded yet")
+			}
+		}
+		return nil
+	}
+	return usageError{"statusline takes install, uninstall or status"}
+}
+
+// hook is what Claude Code runs on every statusline refresh. It records the figures,
+// then shows the previous statusline if there was one, or limit-ledger's own line.
+// It never fails: a broken statusline is worse than a missed sample.
+func hook(stdin io.Reader, stdout io.Writer) {
+	data, _ := io.ReadAll(io.LimitReader(stdin, 4<<20))
+	var p sample.Payload
+	_ = json.Unmarshal(data, &p)
+	s, ok := sample.FromPayload(p, time.Now())
+	if ok {
+		if spool, err := paths.Spool(); err == nil {
+			_ = sample.Append(spool, s)
+		}
+	}
+	if chain, err := paths.Chain(); err == nil {
+		if out, ran := sample.RunPrevious(sample.LoadChain(chain).Previous, data, 2*time.Second); ran {
+			fmt.Fprint(stdout, out)
+			return
+		}
+	}
+	fmt.Fprintln(stdout, sample.Render(s, ok, time.Local))
 }

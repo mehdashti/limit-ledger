@@ -18,7 +18,21 @@ import (
 )
 
 // migrations[i] takes the schema from version i to i+1.
-var migrations = []string{schemaV1, schemaV2}
+var migrations = []string{schemaV1, schemaV2, schemaV3}
+
+// schemaV3 adds utilization samples from the statusline hook.
+const schemaV3 = `
+CREATE TABLE samples (
+	ts          INTEGER NOT NULL,
+	session_key TEXT NOT NULL,
+	five_pct    REAL,
+	five_reset  INTEGER,
+	seven_pct   REAL,
+	seven_reset INTEGER,
+	version     TEXT NOT NULL DEFAULT '',
+	PRIMARY KEY (ts, session_key)
+) WITHOUT ROWID;
+`
 
 const schemaV1 = `
 CREATE TABLE responses (

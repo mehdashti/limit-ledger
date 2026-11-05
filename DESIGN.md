@@ -172,6 +172,19 @@ Non-goals:
   user's statusline therefore stays as it was.
 - It must finish within ~50 ms and never print errors into the statusline.
 
+Implemented (schema v3):
+- `used_percentage` arrives with one decimal place (`round(utilization × 1000) / 10`), and `resets_at` is a Unix
+  time in seconds.
+- Samples are grouped into windows by `seven_day.resets_at`, because each account resets on its own schedule. The
+  window's account is the one the account timeline names for most of its samples. A sample taken just after a
+  switch therefore cannot split a window.
+- `ingest` keeps a sample when any figure changed, or after 10 minutes without a change.
+- `report windows` shows, per window, the rise of the weekly figure against the account's local usage
+  meanwhile: API-equivalent dollars and output tokens per 1%. Usage elsewhere (other machines, claude.ai) also
+  raises the figure, so the local cost of 1% is a lower bound.
+- Open: does the desktop app or the VS Code extension run the statusline command? Samples carry the session id,
+  so this can be checked against the transcripts' `entrypoint` once data arrives.
+
 **Mode B, local proxy (optional, later, off by default):**
 - A pass-through on `127.0.0.1` (`limit-ledger proxy`, built on `httputil.ReverseProxy`), enabled through
   `ANTHROPIC_BASE_URL`. It reads the `anthropic-ratelimit-*` headers and the usage of every response, including

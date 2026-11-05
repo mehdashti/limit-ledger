@@ -226,3 +226,54 @@ func TestIngestAccountRecords(t *testing.T) {
 		t.Errorf("accounts %+v %v", accts, err)
 	}
 }
+
+func TestIngestSamples(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "ledger.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	spool := filepath.Join(t.TempDir(), "samples.jsonl")
+	line := func(ts int64, pct float64) string {
+		return fmt.Sprintf(`{"ts":%d,"session_id":"s","seven_pct":%g,"seven_reset":1762639200000,"five_pct":10}`, ts, pct) + "\n"
+	}
+	const min = 60 * 1000
+	writeFile(t, spool,
+		line(1*min, 40),
+		line(2*min, 40),    // unchanged, 1 min later: dropped
+		line(3*min, 40.1),  // changed: kept
+		line(20*min, 40.1), // unchanged but 17 min later: kept
+		"garbage\n",
+		line(21*min, 41)[:20], // partial line: left for later
+	)
+	ss, err := Samples(st, spool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ss.Read != 4 || ss.Kept != 3 {
+		t.Errorf("first pass read %d kept %d, want 4 and 3", ss.Read, ss.Kept)
+	}
+	appendTo(t, spool, line(21*min, 41)[20:]+line(22*min, 41))
+	ss, err = Samples(st, spool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ss.Read != 2 || ss.Kept != 1 {
+		t.Errorf("second pass read %d kept %d, want 2 and 1", ss.Read, ss.Kept)
+	}
+	all, err := st.Samples(0, 1<<62)
+	if err != nil || len(all) != 4 {
+		t.Fatalf("stored %d samples, %v", len(all), err)
+	}
+	if *all[3].SevenPct != 41 || *all[3].SevenReset != 1762639200000 {
+		t.Errorf("last sample %+v", all[3])
+	}
+	// Nothing new: no work.
+	if ss, err = Samples(st, spool); err != nil || ss.Read != 0 {
+		t.Errorf("third pass %+v %v", ss, err)
+	}
+	// Missing spool is fine.
+	if _, err := Samples(st, filepath.Join(t.TempDir(), "none.jsonl")); err != nil {
+		t.Error(err)
+	}
+}
