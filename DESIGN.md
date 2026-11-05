@@ -135,16 +135,19 @@ Non-goals:
 ### 4.2 sample — utilization recorder
 
 **Mode A, statusline (default):**
-- A tiny script set as `statusLine.command`. It reads the stdin JSON and appends
-  `(ts, five_hour.used_percentage, five_hour.resets_at, seven_day.used_percentage, seven_day.resets_at,
-  claude_version)` to `samples`.
+- The same binary runs as `limit-ledger statusline`, set as `statusLine.command`. It reads the stdin JSON and
+  appends one line `(ts, five_hour.used_percentage, five_hour.resets_at, seven_day.used_percentage,
+  seven_day.resets_at, claude_version)` to a spool file opened with `O_APPEND`.
+- It does not open SQLite. Several sessions may run the statusline at once: appending a short line is safe for
+  that, a database lock is not. `ingest` later moves the spool lines into `samples`.
 - It then runs the user's previous statusline command, if any, with the same stdin and prints its output. The
   user's statusline therefore stays as it was.
 - It must finish within ~50 ms and never print errors into the statusline.
 
 **Mode B, local proxy (optional, later, off by default):**
-- A pass-through on `127.0.0.1`, enabled through `ANTHROPIC_BASE_URL`. It reads the `anthropic-ratelimit-*`
-  headers and the usage of every response, including the side calls that transcripts miss.
+- A pass-through on `127.0.0.1` (`limit-ledger proxy`, built on `httputil.ReverseProxy`), enabled through
+  `ANTHROPIC_BASE_URL`. It reads the `anthropic-ratelimit-*` headers and the usage of every response, including
+  the side calls that transcripts miss.
 - Rules:
   - stream SSE through without buffering;
   - never log request bodies or `authorization` headers;
@@ -217,10 +220,34 @@ Non-goals:
 
 ## 6. Stack
 
-- Python 3, standard library only (`sqlite3`, `json`, `pathlib`), so it installs with `pipx` or `uv tool`
-  without dependencies. The fit is small (tens of weights), so plain Python is enough.
-- Linux and macOS first. Windows paths later.
-- License: MIT for code. For the community data table: MIT, CC0 or CC-BY-4.0 (to decide).
+Decided 2026-11-05: **Go**. The goals were no extra install for users, memory safety and speed. TypeScript on
+Node was the runner-up. Rust was set aside: it brings more complexity for no gain this tool would feel. C was
+ruled out: hand-written JSON and TLS handling is too risky.
+
+- **Language:** Go. One static binary and no runtime for the user to install. Every command is a subcommand of
+  that binary: `ingest`, `statusline`, `calibrate`, `detect`, `report`, `export`, and later `proxy`.
+- **Storage:** SQLite through `modernc.org/sqlite`, which is pure Go with no cgo, so cross-compiling stays a plain
+  `GOOS`/`GOARCH` build. Data lives in the user's data directory: XDG on Linux,
+  `~/Library/Application Support` on macOS.
+- **Parsing:** lines are prefiltered with `bytes.Contains` for `"usage"`, then decoded with `encoding/json`.
+  During backfill a bounded worker pool reads files in parallel.
+- **Fit:** a small non-negative least-squares solver, regularised toward the prior and written in the project.
+  The problem has only tens of weights, so `gonum` is added only if it earns its place.
+- **Proxy (M6):** the standard library's `net/http/httputil.ReverseProxy`, with immediate flushing so SSE
+  streams pass through unbuffered.
+- **Dependencies:** as few as possible. CI runs `go vet` and `govulncheck`.
+- **Tests and CI:** `go test`, on GitHub Actions for Linux and macOS.
+- **Release:** GoReleaser publishes binaries for Linux, macOS and Windows (amd64 and arm64) on GitHub Releases,
+  plus a Homebrew tap.
+  - Unsigned binaries trigger Gatekeeper on macOS and SmartScreen on Windows.
+  - Signing and notarisation are a release-time decision. A Homebrew formula install usually avoids the macOS
+    prompt.
+- **Platforms:** Linux and macOS first, Windows paths later.
+- **License:** MIT for code. For the community data table: MIT, CC0 or CC-BY-4.0 (to decide).
+- **Reference timings, measured on the author's machine on 2026-11-05:**
+  - The single-threaded Python prototype read 18 GB of transcripts in about 40 s.
+  - Hook start-up was 10–12 ms in Python and about 18 ms in Node.
+  - A Go binary is expected to start in a few milliseconds. This is not measured yet.
 
 ## 7. Milestones
 
