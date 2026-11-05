@@ -4,3 +4,6 @@ notes/
 # Local data
 *.db
 __pycache__/
+
+# Release build output
+dist/

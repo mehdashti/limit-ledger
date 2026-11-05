@@ -1,0 +1,46 @@
+# Release build: on a pushed tag v*, .github/workflows/release.yml runs GoReleaser,
+# which builds static binaries and publishes them as a GitHub Release.
+version: 2
+project_name: limit-ledger
+
+builds:
+  - id: limit-ledger
+    main: ./cmd/limit-ledger
+    binary: limit-ledger
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    # install.sh relies on this name.
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+
+release:
+  prerelease: auto
+  footer: |
+    Install on Linux or macOS:
+
+    ```sh
+    curl -fsSL https://raw.githubusercontent.com/mehdashti/limit-ledger/main/install.sh | sh
+    ```
+
+    Unofficial; not affiliated with Anthropic.

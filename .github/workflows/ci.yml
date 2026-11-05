@@ -34,3 +34,16 @@ jobs:
           diff -u community/TABLE.md "$RUNNER_TEMP/TABLE.md" || (echo 'community/TABLE.md is out of date: run limit-ledger community pool community --markdown > community/TABLE.md' && exit 1)
       - name: govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  release-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: check

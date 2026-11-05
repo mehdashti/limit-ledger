@@ -22,12 +22,25 @@ See [DESIGN.md](DESIGN.md).
 - The database lives in your data directory (`~/.local/share/limit-ledger` on Linux,
   `~/Library/Application Support/limit-ledger` on macOS).
 
-## Build
+## Install
 
-Requires Go 1.27 or newer:
+On Linux or macOS:
 
 ```sh
-go build -o limit-ledger ./cmd/limit-ledger
+curl -fsSL https://raw.githubusercontent.com/mehdashti/limit-ledger/main/install.sh | sh
+```
+
+The script picks the right file for your system from the [latest release](https://github.com/mehdashti/limit-ledger/releases),
+checks it against the release's `checksums.txt`, and puts `limit-ledger` in `~/.local/bin`. Set
+`LIMIT_LEDGER_VERSION=v0.1.0` for a given version, or `LIMIT_LEDGER_BIN_DIR` for another folder. On Windows, download
+the `.zip` from the release page.
+
+Release files are not signed. Files fetched by `curl` are not quarantined on macOS, so Gatekeeper does not stop them.
+
+To build from source (Go 1.27 or newer):
+
+```sh
+go install github.com/mehdashti/limit-ledger/cmd/limit-ledger@latest
 ```
 
 ## Use
