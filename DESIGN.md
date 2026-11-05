@@ -261,6 +261,29 @@ Implemented (schema v3):
   - **window anomaly:** an irregular reset.
 - Output: a report line in the CLI, an optional desktop notification, and an optional HTML page.
 
+**Implemented (v1, schema v5), `limit-ledger detect`:**
+- Every account-week (the calibrate observations, default: last 6 weeks) is measured with one fixed set of
+  weights: the newest saved fit, or else a fit on the span. Each week's cost of 1% is compared with the median
+  of up to 4 earlier weeks of the same plan.
+- Two earlier versions were tried and dropped:
+  - comparing each week with all other weeks: one odd week distorted the verdict on its neighbours;
+  - refitting the weights for each comparison: with 2–4 weeks the fitted weights swing to the grid edges.
+- A deviation of at least `--threshold` (default 15%) is a change:
+  - **budget:** the deviation keeps its sign and at least half its size under every reference weighting (API
+    prices, output only, cache reads free). The whole limit moved, or, if 1% got cheaper, the account was also
+    used elsewhere;
+  - **weighting:** otherwise. The token mix or the weights changed.
+- **Usage elsewhere:** a rise of the weekly figure of at least 1 point between two readings of a window, while
+  local usage of that account was at most $2 API-equivalent per point, proves usage on another machine or in
+  claude.ai.
+- Alerts are raised for the newest week of each account and for every rise elsewhere. Each alert is raised once
+  (`alerts` table); `--notify` shows a desktop notification (`notify-send`, `osascript`), and `--quiet` prints
+  only new alerts. `report alerts` lists them. The desktop scheduled task runs `detect --notify --quiet` after
+  each reading.
+- First result (author's data, saved two-week fit): genuine mid-October limit hits were worth 159K–304K units
+  per 1%, the weeks since late October 338K–365K. The budget per 1% grew around the end of October; the current
+  week is normal (+13%) against the four before it.
+
 ### 4.5 export and community tables
 
 - `export` writes one JSON file per user:

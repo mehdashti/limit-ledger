@@ -5,12 +5,13 @@ utilization figures what one percent of the weekly limit is worth, and it report
 
 **Unofficial.** Not affiliated with or endorsed by Anthropic. All weights and budgets it reports are estimates.
 
-Status: early development. M1, M2 and a first M3 work:
+Status: early development. M1–M3 and a first M4 work:
 - reading transcripts and attributing usage to accounts;
 - weekly and limit-hit reports;
 - recording the weekly percentage (statusline hook, desktop task or by hand);
-- estimating the weights of each token kind and the cost of 1% of the weekly limit.
-Automatic change detection is next. See [DESIGN.md](DESIGN.md).
+- estimating the weights of each token kind and the cost of 1% of the weekly limit;
+- detecting changes in the weekly limit, with desktop notifications.
+Shared tables (M5) are next. See [DESIGN.md](DESIGN.md).
 
 ## Privacy
 
@@ -46,6 +47,11 @@ limit-ledger report compare --from 2026-11-02 --vs-from 2026-10-26 --vs-to 2026-
 limit-ledger accounts set work --switch-full   # if you switch away from an account only at its limit
 limit-ledger calibrate --weeks 2 --save
 limit-ledger report fits
+
+# has the weekly limit changed? compares each week with the weeks before it
+limit-ledger detect             # table of all weeks and their deviation
+limit-ledger detect --notify --quiet   # only new alerts, also as desktop notifications
+limit-ledger report alerts
 
 limit-ledger statusline install   # record the weekly % that Claude Code shows (see below)
 limit-ledger report windows       # weekly % against local usage: API-equivalent $ and output per 1%

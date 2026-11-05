@@ -17,6 +17,7 @@ import (
 
 	"github.com/mehdashti/limit-ledger/internal/calibrate"
 	"github.com/mehdashti/limit-ledger/internal/ingest"
+	"github.com/mehdashti/limit-ledger/internal/notify"
 	"github.com/mehdashti/limit-ledger/internal/paths"
 	"github.com/mehdashti/limit-ledger/internal/report"
 	"github.com/mehdashti/limit-ledger/internal/sample"
@@ -39,6 +40,8 @@ Usage:
   limit-ledger accounts set KEY [--label NAME] [--plan PLAN] [--switch-full] [--db PATH]
   limit-ledger calibrate        [--weeks N] [--save] [--top N] [--db PATH]
   limit-ledger report fits     [--db PATH]
+  limit-ledger detect          [--weeks N] [--threshold PCT] [--notify] [--quiet] [--db PATH]
+  limit-ledger report alerts   [--db PATH]
   limit-ledger statusline install | uninstall | status
   limit-ledger sample add --weekly PCT --resets TIME [--five PCT --five-resets TIME]
   limit-ledger version
@@ -82,6 +85,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cmdStatusline(args[1:], os.Stdin, stdout, stderr)
 	case "calibrate":
 		return cmdCalibrate(args[1:], stdout, stderr)
+	case "detect":
+		return cmdDetect(args[1:], stdout, stderr)
 	case "sample":
 		return cmdSample(args[1:], stdout, stderr)
 	case "accounts":
@@ -162,6 +167,8 @@ func cmdReport(which string, args []string, stdout, stderr io.Writer) error {
 		return cmdCompare(st, cmpFlags, stdout)
 	case "fits":
 		return report.Fits(st, stdout, time.Local)
+	case "alerts":
+		return report.Alerts(st, stdout, time.Local)
 	}
 	return usageError{"unknown report " + which}
 }
@@ -516,4 +523,35 @@ func cmdCalibrate(args []string, stdout, stderr io.Writer) error {
 		Options: calibrate.Options{Since: since, Now: now.UnixMilli()},
 		Save:    *save, Top: *top, Loc: time.Local,
 	})
+}
+
+func cmdDetect(args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("detect", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	db := dbFlag(fs)
+	weeks := fs.Int("weeks", 6, "compare weekly windows that reset in the last N weeks (0 = all)")
+	threshold := fs.Float64("threshold", 15, "a deviation of at least this many percent is a change")
+	notifyFlag := fs.Bool("notify", false, "show a desktop notification for each new alert")
+	quiet := fs.Bool("quiet", false, "print only new alerts")
+	if err := fs.Parse(args); err != nil {
+		return usageError{err.Error()}
+	}
+	st, err := openExisting(*db)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	now := time.Now()
+	since := int64(0)
+	if *weeks > 0 {
+		since = now.AddDate(0, 0, -7**weeks).UnixMilli()
+	}
+	opt := report.DetectOptions{
+		Options:   calibrate.Options{Since: since, Now: now.UnixMilli()},
+		Threshold: *threshold / 100, Quiet: *quiet, Loc: time.Local,
+	}
+	if *notifyFlag {
+		opt.Notify = notify.Send
+	}
+	return report.Detect(st, stdout, opt)
 }

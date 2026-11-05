@@ -18,7 +18,16 @@ import (
 )
 
 // migrations[i] takes the schema from version i to i+1.
-var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4}
+var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5}
+
+// schemaV5 remembers which change alerts were already raised, so each is raised once.
+const schemaV5 = `
+CREATE TABLE alerts (
+	key     TEXT PRIMARY KEY,
+	ts      INTEGER NOT NULL,
+	message TEXT NOT NULL
+) WITHOUT ROWID;
+`
 
 // schemaV4 adds the per-account switch policy and the history of weight fits.
 const schemaV4 = `

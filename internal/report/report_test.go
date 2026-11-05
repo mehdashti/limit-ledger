@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mehdashti/limit-ledger/internal/calibrate"
 	"github.com/mehdashti/limit-ledger/internal/sample"
 	"github.com/mehdashti/limit-ledger/internal/store"
 	"github.com/mehdashti/limit-ledger/internal/transcript"
@@ -326,5 +327,73 @@ func TestCompare(t *testing.T) {
 	// A period that runs into the future counts only days up to now.
 	if d := (Period{day("2026-10-31T00:00:00Z"), day("2026-11-03T00:00:00Z")}).Days(day("2026-11-01T12:00:00Z")); d != 1.5 {
 		t.Errorf("days so far %v", d)
+	}
+}
+
+func TestDetectAlertsOnce(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "ledger.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	b, err := st.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.PutOrgEvent(&transcript.OrgEvent{TS: ms("2026-10-01T00:00:00Z"), Org: "org-a", SessionID: "s"}); err != nil {
+		t.Fatal(err)
+	}
+	// Weekly hits on a Tuesday 07:00 UTC schedule: three normal weeks of 20M output,
+	// then a week that hits the limit after 12M (the limit looks 40% smaller).
+	n := 0
+	for i, out := range []int64{20_000_000, 20_000_000, 20_000_000, 12_000_000} {
+		reset := ms("2026-10-13T07:00:00Z") + int64(i)*7*24*3600*1000
+		n++
+		if err := b.PutResponse(&transcript.Response{MsgID: fmt.Sprint("d", n), TS: reset - 3*24*3600*1000,
+			Model: "claude-opus-5-5", Kind: "main", Tokens: transcript.Tokens{Output: out}}); err != nil {
+			t.Fatal(err)
+		}
+		if err := b.PutAnchor(&transcript.Anchor{Kind: "weekly", Hit: reset - 24*3600*1000, Resets: reset}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A rise while idle here.
+	p1, p2, r := 10.0, 14.0, ms("2026-11-10T07:00:00Z")
+	if err := b.PutSample(sample.Sample{TS: ms("2026-11-04T00:00:00Z"), SessionID: "x", SevenPct: &p1, SevenReset: &r}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.PutSample(sample.Sample{TS: ms("2026-11-04T05:00:00Z"), SessionID: "y", SevenPct: &p2, SevenReset: &r}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	var sent []string
+	opt := DetectOptions{Options: calibrate.Options{Now: ms("2026-11-05T00:00:00Z")}, Loc: time.UTC,
+		Notify: func(_, body string) bool { sent = append(sent, body); return true }}
+	var out bytes.Buffer
+	if err := Detect(st, &out, opt); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	if !strings.Contains(text, "-40%") || !strings.Contains(text, "budget") {
+		t.Errorf("detect output:\n%s", text)
+	}
+	if len(sent) != 2 || !strings.Contains(sent[0]+sent[1], "40% fewer tokens") || !strings.Contains(sent[0]+sent[1], "rose 4 points") {
+		t.Errorf("notifications %q", sent)
+	}
+	// Running again raises nothing new.
+	sent = nil
+	out.Reset()
+	opt.Quiet = true
+	if err := Detect(st, &out, opt); err != nil {
+		t.Fatal(err)
+	}
+	if len(sent) != 0 || out.Len() != 0 {
+		t.Errorf("second run should be silent: %q %q", sent, out.String())
+	}
+	out.Reset()
+	if err := Alerts(st, &out, time.UTC); err != nil || strings.Count(out.String(), "\n") != 2 {
+		t.Errorf("alerts list %q %v", out.String(), err)
 	}
 }
