@@ -18,7 +18,38 @@ import (
 )
 
 // migrations[i] takes the schema from version i to i+1.
-var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5}
+var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6}
+
+// schemaV6 adds what merging machines needs: a cross-machine account id (the same on
+// every machine, filled in from credential_org records, so every file is read again)
+// and the usage imported from other machines.
+const schemaV6 = `
+ALTER TABLE accounts ADD COLUMN xid TEXT NOT NULL DEFAULT '';
+
+CREATE TABLE remote_responses (
+	machine    TEXT NOT NULL,
+	mid        TEXT NOT NULL,
+	ts         INTEGER NOT NULL,
+	account    TEXT NOT NULL,
+	model      TEXT NOT NULL,
+	speed      TEXT NOT NULL DEFAULT '',
+	input      INTEGER NOT NULL DEFAULT 0,
+	cache_5m   INTEGER NOT NULL DEFAULT 0,
+	cache_1h   INTEGER NOT NULL DEFAULT 0,
+	cache_read INTEGER NOT NULL DEFAULT 0,
+	output     INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY (machine, mid)
+) WITHOUT ROWID;
+CREATE INDEX remote_responses_ts ON remote_responses(ts);
+
+CREATE TABLE machines (
+	machine     TEXT PRIMARY KEY,
+	imported_ts INTEGER NOT NULL,
+	responses   INTEGER NOT NULL
+) WITHOUT ROWID;
+
+DELETE FROM files;
+`
 
 // schemaV5 remembers which change alerts were already raised, so each is raised once.
 const schemaV5 = `
@@ -219,6 +250,13 @@ func (s *Store) PathKey(rel string) string {
 // AccountKey is the stored identity of an organization: a salted hash of its UUID.
 func (s *Store) AccountKey(org string) string { return s.key("org", org, 6) }
 
+// XID is an account's cross-machine id: a hash of the organization UUID with a fixed
+// salt, so it comes out the same on every machine without storing the UUID.
+func XID(org string) string {
+	h := sha256.Sum256([]byte("limit-ledger-xid\x00" + org))
+	return hex.EncodeToString(h[:6])
+}
+
 // SessionKey is the stored identity of a session id.
 func (s *Store) SessionKey(id string) string { return s.key("session", id, 8) }
 
@@ -259,7 +297,7 @@ type Batch struct {
 	st                   *Store
 	tx                   *sql.Tx
 	resp, anchor, fileSt *sql.Stmt
-	orgEv, account       *sql.Stmt
+	orgEv, account, xid  *sql.Stmt
 }
 
 const upsertResponse = `
@@ -293,6 +331,7 @@ func (s *Store) Begin() (*Batch, error) {
 		{&b.anchor, "INSERT OR IGNORE INTO anchors(kind, hit_ts, resets_ts) VALUES(?,?,?)"},
 		{&b.orgEv, "INSERT OR IGNORE INTO org_events(ts, account, session_key) VALUES(?,?,?)"},
 		{&b.account, "INSERT OR IGNORE INTO accounts(account) VALUES(?)"},
+		{&b.xid, "UPDATE accounts SET xid = ? WHERE account = ? AND xid = ''"},
 		{&b.fileSt, `INSERT INTO files(path_key, dev, ino, size, offset, mtime) VALUES(?,?,?,?,?,?)
 			ON CONFLICT(path_key) DO UPDATE SET dev=excluded.dev, ino=excluded.ino,
 			size=excluded.size, offset=excluded.offset, mtime=excluded.mtime`},
@@ -332,7 +371,10 @@ func (b *Batch) PutOrgEvent(e *transcript.OrgEvent) error {
 	if _, err := b.orgEv.Exec(e.TS, acct, b.st.SessionKey(e.SessionID)); err != nil {
 		return err
 	}
-	_, err := b.account.Exec(acct)
+	if _, err := b.account.Exec(acct); err != nil {
+		return err
+	}
+	_, err := b.xid.Exec(XID(e.Org), acct)
 	return err
 }
 

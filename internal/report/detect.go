@@ -91,21 +91,21 @@ func Detect(st *store.Store, w io.Writer, opt DetectOptions) error {
 			fmt.Fprintln(w, "No weeks to compare yet.")
 		} else {
 			tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(tw, "account\twindow resets\treading\t1% this week\t1% earlier weeks\tdeviation\tunder API prices\tunder output only\tverdict")
+			fmt.Fprintln(tw, "account\twindow resets\treading\t1% this week\t1% earlier weeks (n)\tdeviation\tunder API prices\tunder output only\tverdict")
 			for _, f := range findings {
 				o := f.Obs
 				if f.Verdict == detect.TooFew {
 					fmt.Fprintf(tw, "%s\t%s\t%.0f%%\t-\t-\t-\t-\t-\t%s\n", names.of(o.Account), when(o.Reset), o.Percent, f.Verdict)
 					continue
 				}
-				fmt.Fprintf(tw, "%s\t%s\t%.0f%%\t%s\t%s\t%s\t%s\t%s\t%s\n", names.of(o.Account), when(o.Reset), o.Percent,
-					Tokens(int64(f.Observed)), Tokens(int64(f.Expected)), pct(f.Deviation),
+				fmt.Fprintf(tw, "%s\t%s\t%.0f%%\t%s\t%s (%d)\t%s\t%s\t%s\t%s\n", names.of(o.Account), when(o.Reset), o.Percent,
+					Tokens(int64(f.Observed)), Tokens(int64(f.Expected)), f.Others, pct(f.Deviation),
 					pct(f.ByReference["API prices"]), pct(f.ByReference["output only"]), f.Verdict)
 			}
 			if err := tw.Flush(); err != nil {
 				return err
 			}
-			fmt.Fprintf(w, "\nEach week is compared with the median of up to %d earlier weeks of its plan, all measured with the\nweights above.\n", detect.Baseline)
+			fmt.Fprintf(w, "\nEach week is compared with the median of up to %d earlier weeks of the same account, all measured\nwith the weights above. Accounts are compared with themselves: one may also be used where this\nledger cannot see (claude.ai chat), which makes its visible budget steadily smaller.\n", detect.Baseline)
 			fmt.Fprintf(w, "A deviation of %.0f%% or more is a change. \"budget\": the same under every weighting, so the whole\n", opt.Threshold*100)
 			fmt.Fprintln(w, "limit moved (or, if 1% got cheaper, the account was also used elsewhere). \"weighting\": it depends")
 			fmt.Fprintln(w, "on how cache tokens count, so the token mix or the weights changed.")

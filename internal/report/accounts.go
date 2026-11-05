@@ -35,7 +35,8 @@ func (n accountNames) of(key string) string {
 	return key
 }
 
-// usageBy sums usage in [from, to) per account, following the timeline.
+// usageBy sums usage in [from, to) per account: this machine's usage following the
+// timeline, plus each account's usage imported from other machines.
 func usageBy(st *store.Store, segs []store.Segment, from, to int64) (map[string]Summary, error) {
 	groups := map[string][]store.Group{}
 	for _, sg := range segs {
@@ -43,11 +44,22 @@ func usageBy(st *store.Store, segs []store.Segment, from, to int64) (map[string]
 		if a >= b {
 			continue
 		}
-		g, err := st.Totals(a, b)
+		g, err := st.LocalTotals(a, b)
 		if err != nil {
 			return nil, err
 		}
 		groups[sg.Account] = append(groups[sg.Account], g...)
+	}
+	remote, err := st.RemoteAccounts(from, to)
+	if err != nil {
+		return nil, err
+	}
+	for _, acct := range remote {
+		g, err := st.RemoteTotals(acct, from, to)
+		if err != nil {
+			return nil, err
+		}
+		groups[acct] = append(groups[acct], g...)
 	}
 	out := map[string]Summary{}
 	for acct, g := range groups {
@@ -71,7 +83,7 @@ func switchRange(st *store.Store, segs []store.Segment, acct string, from, to in
 		if a >= b {
 			continue
 		}
-		g, err := st.Totals(a, b)
+		g, err := st.LocalTotals(a, b) // the switch moment is uncertain only on this machine
 		if err != nil {
 			return 0, 0, err
 		}

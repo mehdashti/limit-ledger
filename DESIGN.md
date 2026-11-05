@@ -244,9 +244,10 @@ Implemented (schema v3):
   the chosen weeks (`--weeks`, default 2), so a budget change inside the span shows up as a poor fit.
 - `calibrate --save` stores the best fit per plan, and `report fits` lists the history. The observation table
   shows each week's cost of 1% under the best fit and its deviation from the mean.
-- First result (author's data): over two weeks, cache writes ≈ 0 and cache reads ≈ 0.25 × their API ratio, with
-  a spread of 3.3%. Adding the mid-October weeks gives a much worse fit (11%), which points to a different budget
-  then.
+- First result (author's data, one machine only): over two weeks, cache writes ≈ 0 and cache reads ≈ 0.25 × their
+  API ratio, with a spread of 3.3%. This was before the second machine's usage was merged (§4.6), so it is
+  superseded. With both machines the two accounts differ steadily (see §4.4), and a fit that pools accounts is
+  worse (≈ 11%).
 
 ### 4.4 detect — change detection
 
@@ -280,9 +281,32 @@ Implemented (schema v3):
   (`alerts` table); `--notify` shows a desktop notification (`notify-send`, `osascript`), and `--quiet` prints
   only new alerts. `report alerts` lists them. The desktop scheduled task runs `detect --notify --quiet` after
   each reading.
-- First result (author's data, saved two-week fit): genuine mid-October limit hits were worth 159K–304K units
-  per 1%, the weeks since late October 338K–365K. The budget per 1% grew around the end of October; the current
-  week is normal (+13%) against the four before it.
+- Each account is compared with its own earlier weeks, not with other accounts. After merging the second machine,
+  the author's two accounts (same plan) reached 100% at steadily different usage: about $2,050 and about $2,750
+  API-equivalent per week. A comparison across accounts read that steady gap as a change. The likely cause is
+  usage the ledger cannot see on one account (claude.ai chat).
+- Result (author's data, both machines): one account is stable from mid-October to early November (−7%, +2%) and
+  slightly larger this week (+16%). The other grew clearly from mid-October (+61%, then +47%). There is no sign
+  of a cut.
+
+### 4.6 merging machines
+
+Implemented (schema v6):
+- An account used on several machines has its usage split between their ledgers, but its weekly figure is
+  account-wide. Without merging, every account sum misses the other machines' part. In the author's data that was
+  up to 40% of a week.
+- Each account gets a cross-machine id at ingest: `xid`, a SHA-256 of the organization UUID with a fixed salt. It
+  is the same on every machine without storing the UUID. Local keys stay salted per machine.
+- `usage-export` (on the other machine) writes every response it can attribute with its own timeline: time,
+  account `xid`, model, speed, token counts, and a hash of the message id. `usage-import` (here) stores them in
+  `remote_responses`, keyed by (machine, message hash), so a repeated import replaces rather than adds. A ledger
+  refuses its own bundle.
+- Every account sum adds the account's imported usage (`AccountTotals`, `usageBy`, `Totals`, `Daily`). The
+  timeline and the switch-uncertainty range use this machine's data only, because they describe this machine.
+- `limit-ledger pull HOST` does it over ssh in one step: BatchMode (no password prompt), a 5-second connect
+  timeout, and "skipped" rather than an error when the host is unreachable (ssh exit code 255). The desktop task
+  pulls the second machine every 2 hours.
+- Not yet merged: the other machine's utilization samples and limit-hit anchors.
 
 ### 4.5 export and community tables
 

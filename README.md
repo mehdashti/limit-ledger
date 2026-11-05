@@ -59,6 +59,22 @@ limit-ledger report windows       # weekly % against local usage: API-equivalent
 limit-ledger statusline uninstall # put the previous statusline back
 ```
 
+### More than one machine
+
+If you use an account on several machines, each machine's ledger sees only its own share, but the weekly figure
+counts all of them. Pull the other machine's usage into one ledger:
+
+```sh
+limit-ledger pull other-machine     # over ssh, no password prompt; "skipped" if it is off or away
+limit-ledger machines
+```
+
+`pull` runs `limit-ledger ingest` and `usage-export` on the other machine (default path
+`~/.local/bin/limit-ledger`, change it with `--remote-bin`) and imports the result. By hand it is
+`ssh other 'limit-ledger usage-export' | limit-ledger usage-import -`.
+
+Accounts are matched across machines automatically by a cross-machine id; the transfer holds numbers only.
+
 ### Sharing your table
 
 ```sh

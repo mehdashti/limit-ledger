@@ -34,7 +34,7 @@ func TestCheckVerdicts(t *testing.T) {
 	f := Check(obs, w, 0.15)
 	for i := 0; i < 2; i++ {
 		if f[i].Verdict != TooFew {
-			t.Errorf("week %d has fewer than 2 earlier weeks: %s", i, f[i].Verdict)
+			t.Errorf("week %d has no earlier week of its account: %s", i, f[i].Verdict)
 		}
 	}
 	for i := 2; i < 4; i++ {
@@ -46,8 +46,16 @@ func TestCheckVerdicts(t *testing.T) {
 	if last.Verdict != Budget || !last.Cheaper() || last.Deviation > -0.25 || last.Deviation < -0.35 {
 		t.Errorf("smaller budget: %+v", last)
 	}
-	if f := Check(obs[:2], w, 0.15); f[0].Verdict != TooFew {
-		t.Errorf("two weeks only: %s", f[0].Verdict)
+	if f := Check(obs[:2], w, 0.15); f[0].Verdict != TooFew || f[1].Verdict != TooFew {
+		t.Errorf("one week per account only: %s %s", f[0].Verdict, f[1].Verdict)
+	}
+	// Accounts are compared with themselves: a steady difference between accounts is no change.
+	steady := []calibrate.Observation{week("A", 1, 18e6, 6e9, 100, 350e3), week("B", 2, 18e6, 6e9, 100, 260e3),
+		week("A", 3, 18e6, 6e9, 100, 350e3), week("B", 4, 18e6, 6e9, 100, 260e3)}
+	for i, x := range Check(steady, w, 0.15)[2:] {
+		if x.Verdict != Normal {
+			t.Errorf("steady week %d: %s (%.2f)", i+2, x.Verdict, x.Deviation)
+		}
 	}
 }
 

@@ -75,6 +75,8 @@ type Account struct {
 	// SwitchFull says the user switches away from this account only when its weekly
 	// limit is (nearly) used up, so a switch counts as a 100% reading.
 	SwitchFull bool
+	// XID is the cross-machine id (see XID).
+	XID string
 }
 
 // Name is the label if one is set, else the key.
@@ -88,7 +90,7 @@ func (a Account) Name() string {
 // Accounts lists the known accounts in the order they were first seen.
 func (s *Store) Accounts() ([]Account, error) {
 	rows, err := s.db.Query(`SELECT a.account, a.label, a.plan, count(e.ts), coalesce(min(e.ts), 0),
-		coalesce(max(e.ts), 0), a.switch_full FROM accounts a LEFT JOIN org_events e ON e.account = a.account
+		coalesce(max(e.ts), 0), a.switch_full, a.xid FROM accounts a LEFT JOIN org_events e ON e.account = a.account
 		GROUP BY a.account ORDER BY 5`)
 	if err != nil {
 		return nil, err
@@ -97,7 +99,7 @@ func (s *Store) Accounts() ([]Account, error) {
 	var out []Account
 	for rows.Next() {
 		var a Account
-		if err := rows.Scan(&a.Key, &a.Label, &a.Plan, &a.Events, &a.First, &a.Last, &a.SwitchFull); err != nil {
+		if err := rows.Scan(&a.Key, &a.Label, &a.Plan, &a.Events, &a.First, &a.Last, &a.SwitchFull, &a.XID); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -148,9 +150,13 @@ func (s *Store) SetAccountPolicy(prefix string, label, plan *string, switchFull 
 	return keys[0], err
 }
 
-// AccountTotals sums one account's usage in [from, to) along the timeline.
+// AccountTotals sums one account's usage in [from, to): this machine's usage along
+// the timeline, plus the account's usage imported from other machines.
 func (s *Store) AccountTotals(segs []Segment, acct string, from, to int64) ([]Group, error) {
-	var out []Group
+	out, err := s.RemoteTotals(acct, from, to)
+	if err != nil {
+		return nil, err
+	}
 	for _, sg := range segs {
 		if sg.Account != acct {
 			continue
@@ -159,7 +165,7 @@ func (s *Store) AccountTotals(segs []Segment, acct string, from, to int64) ([]Gr
 		if a >= b {
 			continue
 		}
-		g, err := s.Totals(a, b)
+		g, err := s.LocalTotals(a, b)
 		if err != nil {
 			return nil, err
 		}

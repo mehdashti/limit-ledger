@@ -2,7 +2,9 @@
 // other weeks, and how.
 //
 // Each observation (an account-week with a known reading) is compared with the weeks
-// before it (up to Baseline of them). All weeks are measured with one fixed set of
+// before it of the same account (up to Baseline of them). Accounts are compared with
+// themselves because they can differ steadily: one may also be used where this ledger
+// cannot see, such as claude.ai chat, which makes its visible budget smaller. All weeks are measured with one fixed set of
 // weights (the saved fit, see calibrate --save), and a week's cost of 1% is set
 // against the median of the earlier weeks'. Fixed weights and a median keep a few
 // odd weeks from distorting the verdict on the others. A week far off is classified by checking whether the
@@ -30,7 +32,7 @@ const (
 	Normal    = "normal"
 	Budget    = "budget"
 	Weighting = "weighting"
-	TooFew    = "too few weeks to compare"
+	TooFew    = "no earlier week of this account"
 )
 
 // Finding is one week compared with the other weeks of the same plan.
@@ -52,12 +54,12 @@ func (f Finding) Cheaper() bool { return f.Deviation < 0 }
 // Baseline is how many earlier weeks each week is compared with.
 const Baseline = 4
 
-// Check compares every observation with up to Baseline earlier observations of its
-// plan (by reset time). threshold is a fraction (0.15 = 15%).
+// Check compares every observation with up to Baseline earlier observations of the
+// same account (by reset time). threshold is a fraction (0.15 = 15%).
 func Check(obs []calibrate.Observation, weights calibrate.Units, threshold float64) []Finding {
 	byPlan := map[string][]int{}
 	for i, o := range obs {
-		byPlan[o.Plan] = append(byPlan[o.Plan], i)
+		byPlan[o.Plan+"\x00"+o.Account] = append(byPlan[o.Plan+"\x00"+o.Account], i)
 	}
 	out := make([]Finding, len(obs))
 	for _, idx := range byPlan {
@@ -75,7 +77,7 @@ func Check(obs []calibrate.Observation, weights calibrate.Units, threshold float
 
 func compare(o calibrate.Observation, earlier []calibrate.Observation, weights calibrate.Units, threshold float64) Finding {
 	f := Finding{Obs: o, Others: len(earlier), ByReference: map[string]float64{}}
-	if len(earlier) < 2 {
+	if len(earlier) < 1 {
 		f.Verdict = TooFew
 		return f
 	}

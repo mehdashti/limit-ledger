@@ -25,10 +25,15 @@ func scanGroup(sc interface{ Scan(...any) error }, g *Group, withDay bool) error
 	return sc.Scan(dst...)
 }
 
-// Daily returns sums per UTC day, model and speed for fromMs <= ts < toMs.
+// allRows is local and imported usage together.
+const allRows = `(SELECT ts, model, speed, input, cache_5m, cache_1h, cache_read, output FROM responses
+	UNION ALL SELECT ts, model, speed, input, cache_5m, cache_1h, cache_read, output FROM remote_responses)`
+
+// Daily returns sums per UTC day, model and speed for fromMs <= ts < toMs, over this
+// machine's usage and the usage imported from other machines.
 func (s *Store) Daily(fromMs, toMs int64) ([]Group, error) {
 	rows, err := s.db.Query(`SELECT date(ts/1000, 'unixepoch'), model, speed, `+sums+`
-		FROM responses WHERE ts >= ? AND ts < ? GROUP BY 1, 2, 3 ORDER BY 1`, fromMs, toMs)
+		FROM `+allRows+` WHERE ts >= ? AND ts < ? GROUP BY 1, 2, 3 ORDER BY 1`, fromMs, toMs)
 	if err != nil {
 		return nil, err
 	}
@@ -44,10 +49,27 @@ func (s *Store) Daily(fromMs, toMs int64) ([]Group, error) {
 	return out, rows.Err()
 }
 
-// Totals returns sums per model and speed for fromMs <= ts < toMs.
+// Totals returns sums per model and speed for fromMs <= ts < toMs, over this machine's
+// usage and the usage imported from other machines.
 func (s *Store) Totals(fromMs, toMs int64) ([]Group, error) {
-	rows, err := s.db.Query(`SELECT model, speed, `+sums+`
-		FROM responses WHERE ts >= ? AND ts < ? GROUP BY 1, 2`, fromMs, toMs)
+	return s.groups(`SELECT model, speed, `+sums+` FROM `+allRows+` WHERE ts >= ? AND ts < ? GROUP BY 1, 2`,
+		fromMs, toMs)
+}
+
+// LocalTotals is Totals over this machine's usage only.
+func (s *Store) LocalTotals(fromMs, toMs int64) ([]Group, error) {
+	return s.groups(`SELECT model, speed, `+sums+` FROM responses WHERE ts >= ? AND ts < ? GROUP BY 1, 2`,
+		fromMs, toMs)
+}
+
+// RemoteTotals is the usage imported from other machines for one account.
+func (s *Store) RemoteTotals(acct string, fromMs, toMs int64) ([]Group, error) {
+	return s.groups(`SELECT model, speed, `+sums+` FROM remote_responses
+		WHERE account = ? AND ts >= ? AND ts < ? GROUP BY 1, 2`, acct, fromMs, toMs)
+}
+
+func (s *Store) groups(q string, args ...any) ([]Group, error) {
+	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -106,4 +128,23 @@ func (s *Store) Counts() (responses, anchors, files int64, err error) {
 	err = s.db.QueryRow(`SELECT (SELECT count(*) FROM responses), (SELECT count(*) FROM anchors),
 		(SELECT count(*) FROM files)`).Scan(&responses, &anchors, &files)
 	return
+}
+
+// RemoteAccounts lists the accounts that have imported usage in [fromMs, toMs).
+func (s *Store) RemoteAccounts(fromMs, toMs int64) ([]string, error) {
+	rows, err := s.db.Query(`SELECT DISTINCT account FROM remote_responses WHERE ts >= ? AND ts < ? ORDER BY 1`,
+		fromMs, toMs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var a string
+		if err := rows.Scan(&a); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
 }

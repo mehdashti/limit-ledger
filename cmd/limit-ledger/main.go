@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 
 	"github.com/mehdashti/limit-ledger/internal/calibrate"
 	"github.com/mehdashti/limit-ledger/internal/ingest"
+	"github.com/mehdashti/limit-ledger/internal/merge"
 	"github.com/mehdashti/limit-ledger/internal/notify"
 	"github.com/mehdashti/limit-ledger/internal/paths"
 	"github.com/mehdashti/limit-ledger/internal/report"
@@ -45,6 +47,13 @@ Usage:
   limit-ledger report alerts   [--db PATH]
   limit-ledger export          [--weeks N] [--out DIR] [--note TEXT] [--db PATH]
   limit-ledger community pool DIR [--markdown] [--check]
+  limit-ledger usage-export     [--days N] [--out FILE|-] [--db PATH]
+  limit-ledger usage-import    FILE|- [--db PATH]
+  limit-ledger machines        [--db PATH]
+  limit-ledger pull HOST       [--remote-bin PATH] [--days N] [--db PATH]
+
+To add another machine's usage of your accounts, for example over SSH:
+  ssh other-machine limit-ledger usage-export | limit-ledger usage-import -
   limit-ledger statusline install | uninstall | status
   limit-ledger sample add --weekly PCT --resets TIME [--five PCT --five-resets TIME]
   limit-ledger version
@@ -88,6 +97,14 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cmdStatusline(args[1:], os.Stdin, stdout, stderr)
 	case "calibrate":
 		return cmdCalibrate(args[1:], stdout, stderr)
+	case "usage-export":
+		return cmdUsageExport(args[1:], stdout, stderr)
+	case "usage-import":
+		return cmdUsageImport(args[1:], os.Stdin, stdout, stderr)
+	case "pull":
+		return cmdPull(args[1:], stdout, stderr)
+	case "machines":
+		return cmdMachines(args[1:], stdout, stderr)
 	case "export":
 		return cmdExport(args[1:], stdout, stderr)
 	case "community":
@@ -642,5 +659,172 @@ func cmdCommunity(args []string, stdout, stderr io.Writer) error {
 	if *check && len(bad) > 0 {
 		return fmt.Errorf("%d file(s) rejected", len(bad))
 	}
+	return nil
+}
+
+func cmdUsageExport(args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("usage-export", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	db := dbFlag(fs)
+	days := fs.Int("days", 60, "export the last N days")
+	out := fs.String("out", "-", "file to write, or - for standard output")
+	if err := fs.Parse(args); err != nil {
+		return usageError{err.Error()}
+	}
+	st, err := openExisting(*db)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	now := time.Now()
+	b, stats, err := merge.Export(st, now.AddDate(0, 0, -*days).UnixMilli(), now.UnixMilli())
+	if err != nil {
+		return err
+	}
+	if stats.NoXID > 0 {
+		return fmt.Errorf("%d responses belong to accounts without a cross-machine id; run limit-ledger ingest first", stats.NoXID)
+	}
+	data, err := json.Marshal(b)
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	if *out == "-" {
+		_, err = stdout.Write(data)
+	} else {
+		err = os.WriteFile(*out, data, 0o600)
+	}
+	if err == nil {
+		fmt.Fprintf(stderr, "exported %d responses of %d account(s); %d from before account records were left out\n",
+			stats.Rows, len(b.Accounts), stats.Unassigned)
+	}
+	return err
+}
+
+func cmdUsageImport(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("usage-import", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	db := dbFlag(fs)
+	src := "-"
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") || len(args) > 0 && args[0] == "-" {
+		src, args = args[0], args[1:]
+	}
+	if err := fs.Parse(args); err != nil {
+		return usageError{err.Error()}
+	}
+	var r io.Reader = stdin
+	if src != "-" {
+		f, err := os.Open(src)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		r = f
+	}
+	var b merge.Bundle
+	dec := json.NewDecoder(r)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&b); err != nil {
+		return fmt.Errorf("reading bundle: %v", err)
+	}
+	st, err := openExisting(*db)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	stats, err := merge.Import(st, b, time.Now().UnixMilli())
+	if err != nil {
+		return err
+	}
+	names := map[string]string{}
+	if accts, err := st.Accounts(); err == nil {
+		for _, a := range accts {
+			names[a.Key] = a.Name()
+		}
+	}
+	fmt.Fprintf(stdout, "imported %d responses from machine %s\n", stats.Rows, b.Machine)
+	for k, n := range stats.PerAccount {
+		fmt.Fprintf(stdout, "  %s: %d\n", names[k], n)
+	}
+	for _, k := range stats.NewAccounts {
+		fmt.Fprintf(stdout, "  new account %s (used only on the other machine so far)\n", names[k])
+	}
+	return nil
+}
+
+func cmdMachines(args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("machines", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	db := dbFlag(fs)
+	if err := fs.Parse(args); err != nil {
+		return usageError{err.Error()}
+	}
+	st, err := openExisting(*db)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	own, err := st.MachineID()
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(stdout, "this machine:", own)
+	ms, err := st.Machines()
+	if err != nil {
+		return err
+	}
+	if len(ms) == 0 {
+		fmt.Fprintln(stdout, "no other machine imported yet")
+	}
+	for _, m := range ms {
+		fmt.Fprintf(stdout, "%s  %d responses, %s → %s, last import %s\n", m.ID, m.Responses,
+			time.UnixMilli(m.First).Format("2006-01-02"), time.UnixMilli(m.Last).Format("2006-01-02"),
+			time.UnixMilli(m.ImportedTS).Format("2006-01-02 15:04"))
+	}
+	return nil
+}
+
+func cmdPull(args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("pull", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	db := dbFlag(fs)
+	remoteBin := fs.String("remote-bin", "~/.local/bin/limit-ledger", "limit-ledger on the other machine")
+	days := fs.Int("days", 14, "how many days of the other machine's usage to fetch")
+	var host string
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		host, args = args[0], args[1:]
+	}
+	if err := fs.Parse(args); err != nil {
+		return usageError{err.Error()}
+	}
+	if host == "" {
+		return usageError{"pull needs a host, e.g. limit-ledger pull 192.168.1.21"}
+	}
+	st, err := openExisting(*db)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	stats, err := merge.Pull(st, merge.PullOptions{Host: host, RemoteBin: *remoteBin, Days: *days}, time.Now().UnixMilli())
+	if errors.Is(err, merge.ErrUnreachable) {
+		// Not an error: the other machine is simply off or away.
+		fmt.Fprintf(stdout, "skipped: %s is not reachable (%v)\n", host, err)
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	names := map[string]string{}
+	if accts, err := st.Accounts(); err == nil {
+		for _, a := range accts {
+			names[a.Key] = a.Name()
+		}
+	}
+	parts := []string{}
+	for k, n := range stats.PerAccount {
+		parts = append(parts, fmt.Sprintf("%s %d", names[k], n))
+	}
+	sort.Strings(parts)
+	fmt.Fprintf(stdout, "pulled %d responses from %s (%s)\n", stats.Rows, host, strings.Join(parts, ", "))
 	return nil
 }

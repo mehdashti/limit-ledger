@@ -59,20 +59,11 @@ func measure(st *store.Store, segs []store.Segment, opt CompareOptions, p Period
 		}
 		groups = g
 	} else {
-		for _, sg := range segs {
-			if sg.Account != opt.Account {
-				continue
-			}
-			a, b := max(from, sg.Start), min(to, sg.End)
-			if a >= b {
-				continue
-			}
-			g, err := st.Totals(a, b)
-			if err != nil {
-				return usage{}, err
-			}
-			groups = append(groups, g...)
+		g, err := st.AccountTotals(segs, opt.Account, from, to)
+		if err != nil {
+			return usage{}, err
 		}
+		groups = g
 	}
 	u := usage{Summary: Summarize(groups), days: p.Days(opt.Now), byKind: map[string]float64{}}
 	for _, g := range groups {
