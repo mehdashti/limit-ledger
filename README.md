@@ -53,6 +53,17 @@ network request. `ingest` moves the spool into the ledger.
 Install from a stable location (for example `go install ./cmd/limit-ledger`), because the settings file stores
 the binary's path.
 
+### Claude desktop app
+
+The desktop app does not run the statusline command. Record readings from its usage card by hand:
+
+```sh
+limit-ledger sample add --weekly 86 --resets 2026-11-08T22:00:00Z
+```
+
+You can also schedule a desktop task that reads the plan usage every few hours and runs that command followed
+by `limit-ledger ingest`.
+
 If you switch between several accounts, the ledger works out which one was active at each moment from Claude
 Code's `credential_org` records, which exist since about September 2026. It stores only salted hashes of account
 ids.

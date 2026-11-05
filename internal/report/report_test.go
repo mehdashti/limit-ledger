@@ -215,3 +215,35 @@ func TestWindowsPerPercent(t *testing.T) {
 		t.Errorf("report:\n%s", out.String())
 	}
 }
+
+func TestWindowsJitteredResets(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "ledger.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	b, err := st.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	put := func(ts string, pct float64, reset string) {
+		p, r := pct, ms(reset)
+		if err := b.PutSample(sample.Sample{TS: ms(ts), SessionID: ts, SevenPct: &p, SevenReset: &r}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put("2026-11-05T10:00:00Z", 86, "2026-11-08T22:00:00Z")
+	put("2026-11-05T11:00:00Z", 87, "2026-11-08T21:59:59Z") // same reset, a second off
+	put("2026-11-05T12:00:00Z", 88, "2026-11-08T22:00:01Z")
+	put("2026-11-10T12:00:00Z", 5, "2026-11-15T22:00:00Z") // next week
+	if err := b.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	wins, err := Windows(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(wins) != 2 || wins[0].Samples != 3 || wins[0].DeltaPercent != 2 || wins[0].Resets != ms("2026-11-08T22:00:00Z") {
+		t.Errorf("windows %+v", wins)
+	}
+}

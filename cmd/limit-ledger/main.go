@@ -35,6 +35,7 @@ Usage:
   limit-ledger accounts        [--db PATH]
   limit-ledger accounts set KEY [--label NAME] [--plan PLAN] [--db PATH]
   limit-ledger statusline install | uninstall | status
+  limit-ledger sample add --weekly PCT --resets TIME [--five PCT --five-resets TIME]
   limit-ledger version
 
 The statusline hook (installed with "statusline install") records the weekly and 5-hour
@@ -74,6 +75,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cmdReport(args[1], args[2:], stdout, stderr)
 	case "statusline":
 		return cmdStatusline(args[1:], os.Stdin, stdout, stderr)
+	case "sample":
+		return cmdSample(args[1:], stdout, stderr)
 	case "accounts":
 		return cmdAccounts(args[1:], stdout, stderr)
 	case "version", "--version":
@@ -305,4 +308,77 @@ func hook(stdin io.Reader, stdout io.Writer) {
 		}
 	}
 	fmt.Fprintln(stdout, sample.Render(s, ok, time.Local))
+}
+
+// cmdSample records a utilization reading by hand, for clients that do not run the
+// statusline command (the Claude desktop app), from the figures its usage card shows.
+func cmdSample(args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 || args[0] != "add" {
+		return usageError{"sample takes add"}
+	}
+	fs := flag.NewFlagSet("sample add", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	weekly := fs.Float64("weekly", -1, "weekly percent used, for example 86")
+	resets := fs.String("resets", "", "when the weekly limit resets, RFC 3339, for example 2026-11-08T22:00:00Z")
+	five := fs.Float64("five", -1, "5-hour percent used, if the plan has a 5-hour limit")
+	fiveResets := fs.String("five-resets", "", "when the 5-hour limit resets, RFC 3339")
+	at := fs.String("at", "", "when the reading was taken, RFC 3339 (default now)")
+	if err := fs.Parse(args[1:]); err != nil {
+		return usageError{err.Error()}
+	}
+	s, err := manualSample(*weekly, *resets, *five, *fiveResets, *at, time.Now())
+	if err != nil {
+		return usageError{err.Error()}
+	}
+	spool, err := paths.Spool()
+	if err != nil {
+		return err
+	}
+	if err := sample.Append(spool, s); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "recorded: %s; run limit-ledger ingest to add it to the ledger\n", sample.Render(s, true, time.Local))
+	return nil
+}
+
+func manualSample(weekly float64, resets string, five float64, fiveResets, at string, now time.Time) (sample.Sample, error) {
+	s := sample.Sample{TS: now.UnixMilli(), SessionID: "manual"}
+	if at != "" {
+		t, err := time.Parse(time.RFC3339, at)
+		if err != nil {
+			return s, fmt.Errorf("--at: %v", err)
+		}
+		s.TS = t.UnixMilli()
+	}
+	// Reset times are whole seconds, as the statusline delivers them, so manual
+	// readings fall into the same window as hook readings.
+	parseReset := func(name, v string) (*int64, error) {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %v", name, err)
+		}
+		ms := t.Truncate(time.Second).UnixMilli()
+		return &ms, nil
+	}
+	if weekly < 0 || weekly > 100 || resets == "" {
+		return s, fmt.Errorf("--weekly (0-100) and --resets are required")
+	}
+	w := weekly
+	s.SevenPct = &w
+	r, err := parseReset("--resets", resets)
+	if err != nil {
+		return s, err
+	}
+	s.SevenReset = r
+	if five >= 0 {
+		if five > 100 || fiveResets == "" {
+			return s, fmt.Errorf("--five needs a value of 0-100 and --five-resets")
+		}
+		f := five
+		s.FivePct = &f
+		if s.FiveReset, err = parseReset("--five-resets", fiveResets); err != nil {
+			return s, err
+		}
+	}
+	return s, nil
 }

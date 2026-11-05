@@ -47,13 +47,16 @@ func Windows(st *store.Store) ([]Window, error) {
 	// schedules. So samples are grouped by reset time, and the window's account is the
 	// one the timeline names for most of its samples. A sample taken just after a
 	// switch, before the new account's first record, then cannot split a window.
+	// Reset times jitter by a second or so between readings (22:00:00.216 one time,
+	// 21:59:59 the next), so reset times within resetTolerance are one window.
+	canon := canonicalResets(samples)
 	groups := map[int64][]sample.Sample{}
 	var order []int64
 	for _, s := range samples {
 		if s.SevenPct == nil || s.SevenReset == nil {
 			continue
 		}
-		r := *s.SevenReset
+		r := canon[*s.SevenReset]
 		if _, ok := groups[r]; !ok {
 			order = append(order, r)
 		}
@@ -88,6 +91,33 @@ func Windows(st *store.Store) ([]Window, error) {
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Last.TS < out[j].Last.TS })
 	return out, nil
+}
+
+const resetTolerance = int64(time.Hour / time.Millisecond)
+
+// canonicalResets maps every weekly reset time seen in samples to one representative
+// per cluster: reset times closer than resetTolerance to the cluster's first one are
+// the same reset. The representative is rounded to the minute.
+func canonicalResets(samples []sample.Sample) map[int64]int64 {
+	var rs []int64
+	seen := map[int64]bool{}
+	for _, s := range samples {
+		if s.SevenReset != nil && !seen[*s.SevenReset] {
+			seen[*s.SevenReset] = true
+			rs = append(rs, *s.SevenReset)
+		}
+	}
+	sort.Slice(rs, func(i, j int) bool { return rs[i] < rs[j] })
+	out := map[int64]int64{}
+	var first, rep int64
+	for i, r := range rs {
+		if i == 0 || r-first >= resetTolerance {
+			first = r
+			rep = time.UnixMilli(r).Round(time.Minute).UnixMilli()
+		}
+		out[r] = rep
+	}
+	return out
 }
 
 // WindowsReport prints the weekly windows that have utilization samples.

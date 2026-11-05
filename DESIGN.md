@@ -182,8 +182,18 @@ Implemented (schema v3):
 - `report windows` shows, per window, the rise of the weekly figure against the account's local usage
   meanwhile: API-equivalent dollars and output tokens per 1%. Usage elsewhere (other machines, claude.ai) also
   raises the figure, so the local cost of 1% is a lower bound.
-- Open: does the desktop app or the VS Code extension run the statusline command? Samples carry the session id,
-  so this can be checked against the transcripts' `entrypoint` once data arrives.
+- The Claude desktop app does not run the statusline command. Its built-in Claude Code (2.1.317) passes
+  `rate_limits` only to the statusline, not to hooks, even though hooks do run in the desktop app. Whether the
+  VS Code extension runs the statusline is still open.
+
+**Mode C, manual and desktop readings:**
+- `limit-ledger sample add --weekly PCT --resets TIME` records a reading by hand, from the figures in the app's
+  usage card. Manual readings join the same windows as hook readings.
+- In the desktop app, a scheduled task can take readings automatically. Every 2 hours it asks the app for the
+  plan usage (the usage card's data: integer percent, reset time) and runs `sample add` and `ingest`. Each run is
+  a short session that costs a little quota itself, and it runs only while the app is open.
+- Reset times jitter by about a second between readings. Readings whose reset times are within an hour of each
+  other belong to one window.
 
 **Mode B, local proxy (optional, later, off by default):**
 - A pass-through on `127.0.0.1` (`limit-ledger proxy`, built on `httputil.ReverseProxy`), enabled through
