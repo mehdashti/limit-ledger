@@ -1,6 +1,7 @@
 # limit-ledger — design
 
-Status: draft, 2026-11-05. Nothing is built yet.
+Status: first versions of M0–M5 built and released as v0.1.0 (2026-11-05). M6 (proxy) not started. Sections
+marked "Implemented" describe what the code does; the rest is the original plan.
 
 limit-ledger measures how much Claude Code usage a person spends locally. It learns, from the server's own
 utilization figures, how many tokens of each kind one percent of the weekly limit is worth, and reports when that
@@ -245,7 +246,7 @@ Implemented (schema v3):
 - `calibrate --save` stores the best fit per plan, and `report fits` lists the history. The observation table
   shows each week's cost of 1% under the best fit and its deviation from the mean.
 - First result (author's data, one machine only): over two weeks, cache writes ≈ 0 and cache reads ≈ 0.25 × their
-  API ratio, with a spread of 3.3%. This was before the second machine's usage was merged (§4.6), so it is
+  API ratio, with a spread of 3.3%. This was before the second machine's usage was merged (§4.5), so it is
   superseded. With both machines the two accounts differ steadily (see §4.4), and a fit that pools accounts is
   worse (≈ 11%).
 
@@ -289,7 +290,7 @@ Implemented (schema v3):
   slightly larger this week (+16%). The other grew clearly from mid-October (+61%, then +47%). There is no sign
   of a cut.
 
-### 4.6 merging machines
+### 4.5 merging machines
 
 Implemented (schema v6):
 - An account used on several machines has its usage split between their ledgers, but its weekly figure is
@@ -308,7 +309,7 @@ Implemented (schema v6):
   pulls the second machine every 2 hours.
 - Not yet merged: the other machine's utilization samples and limit-hit anchors.
 
-### 4.5 export and community tables
+### 4.6 export and community tables
 
 - `export` writes one JSON file per user:
   - `schema_version` and `tool_version`
@@ -386,25 +387,42 @@ ruled out: hand-written JSON and TLS handling is too risky.
 
 ## 7. Milestones
 
-| # | Deliverable | Done when |
+| # | Deliverable | Status (2026-11-05) |
 |---|---|---|
-| M0 | Repository and this design | Design reviewed |
-| M1 | `ingest` + backfill + weekly report (tokens per kind and model, API-equivalent $) + limit-hit anchors | Report matches the first-look numbers |
-| M2 | `sample` statusline hook, chaining the existing statusline | A week of samples recorded without breaking the statusline |
-| M3 | `calibrate` v1: weights, `B`, confidence intervals, history | Weights for Opus 5.5 with usable intervals |
-| M4 | `detect`: change reports and notifications | A simulated budget change is caught and classified |
-| M5 | `export` + `community/` aggregation + public GitHub release | First external table merged |
-| M6 | Optional proxy mode | Terms checked, fail-safe disable tested |
+| M0 | Repository and this design | Done |
+| M1 | `ingest` + backfill + weekly report + limit-hit anchors; account attribution | Done: 17 GB of history read in about 20 s |
+| M2 | Utilization readings: statusline hook, readings by hand, desktop scheduled task | Done. The desktop app does not run the statusline, so readings there come from the scheduled task |
+| M3 | `calibrate`: weights, cost of 1%, saved fits | v1: grid fit over cache weights; few observations yet |
+| M4 | `detect`: change reports and notifications | v1: each account against its own earlier weeks; alerts raised once |
+| M5 | `export` + `community/` pooling + public release | v1: export, pooling, issue form and CI check; release v0.1.0 published; no shared table yet |
+| — | Merging machines (`usage-export`, `usage-import`, `pull`) | Done: responses only; readings and anchors of other machines not merged yet |
+| M6 | Optional proxy mode | Not started; Anthropic's terms to be checked first |
+
+Next steps, in order:
+1. Let readings accumulate for a few weeks, then `calibrate --save` again. The saved fit of 2026-11-05 predates the
+   merge.
+2. Merge the other machines' utilization readings and limit-hit anchors as well (§4.5).
+3. Calibrate per account with a shared set of weights (a budget factor per account), since accounts on one plan can
+   differ steadily.
+4. A Homebrew tap; a first table in `community/`.
+5. M6 only if readings stay too sparse.
 
 ## 8. Open questions
 
-1. Does the Claude desktop app (Code tab) run the statusline command? If not, samples come only from terminal
-   `claude` sessions. That is enough because utilization is account-wide, but it is sparser.
-2. Is `used_percentage` an integer or fractional? This decides the minimum interval `k`.
-3. How does an `api-request-blob` record (effort) link to its response?
-4. Are small-model side calls really absent from transcripts, and how big are they?
-5. Does the separate weekly Fable limit appear in `rate_limits`, or only in the headers?
-6. Is the weekly window always `resets_at − 7 d` per account? The overlaps seen so far are explained by two
-   accounts with fixed weekly schedules. This needs confirming once account attribution exists.
-7. Anthropic's terms on local proxies and on publishing inferred weights.
-8. Final project name.
+Answered:
+- The desktop app does not run the statusline command, and its hooks get no `rate_limits`. Readings there come
+  from the app's own plan usage (scheduled task, integer percent).
+- `used_percentage` in the statusline has one decimal place. The desktop app's usage figure is an integer.
+- Each account's weekly window resets on its own fixed weekly schedule. The overlapping windows seen early on were
+  two accounts.
+- Name: limit-ledger.
+
+Open:
+1. How does an `api-request-blob` record (effort) link to its response?
+2. Are small-model side calls really absent from transcripts, and how big are they?
+3. The desktop app reports a separate weekly Fable window. Does it ever bind, and how does it relate to the
+   all-models window?
+4. Is the steady gap between two accounts on one plan explained by claude.ai chat use (not in transcripts), or is
+   it something else?
+5. Does the VS Code extension run the statusline command?
+6. Anthropic's terms on local proxies and on publishing inferred weights.
