@@ -247,3 +247,84 @@ func TestWindowsJitteredResets(t *testing.T) {
 		t.Errorf("windows %+v", wins)
 	}
 }
+
+func TestCompare(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "ledger.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	b, err := st.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	put := func(ts string, out, cacheRead int64) {
+		n++
+		if err := b.PutResponse(&transcript.Response{MsgID: fmt.Sprint("c", n), TS: ms(ts), Model: "claude-opus-5-5",
+			Kind: "main", Tokens: transcript.Tokens{Output: out, CacheRead: cacheRead}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := b.PutOrgEvent(&transcript.OrgEvent{TS: ms("2026-10-01T00:00:00Z"), Org: "org-a", SessionID: "s"}); err != nil {
+		t.Fatal(err)
+	}
+	// Baseline: 4 days, 1M output per day.
+	for _, d := range []string{"01", "02", "03", "04"} {
+		put("2026-10-"+d+"T12:00:00Z", 1_000_000, 0)
+	}
+	// Period: 2 days, 1.5M output per day (+50%), plus cache reads.
+	put("2026-10-10T12:00:00Z", 1_500_000, 10_000_000)
+	put("2026-10-11T12:00:00Z", 1_500_000, 10_000_000)
+	if err := b.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	la := "A"
+	if _, err := st.SetAccount(st.AccountKey("org-a"), &la, nil); err != nil {
+		t.Fatal(err)
+	}
+	day := func(s string) time.Time { return time.UnixMilli(ms(s)).UTC() }
+	opt := CompareOptions{
+		Period: Period{day("2026-10-10T00:00:00Z"), day("2026-10-12T00:00:00Z")},
+		Base:   Period{day("2026-10-01T00:00:00Z"), day("2026-10-05T00:00:00Z")},
+		Now:    day("2026-11-01T00:00:00Z"), Loc: time.UTC,
+	}
+	var out bytes.Buffer
+	if err := Compare(st, &out, opt); err != nil {
+		t.Fatal(err)
+	}
+	text := strings.Join(strings.Fields(out.String()), " ")
+	for _, want := range []string{
+		"(2.0 days) all accounts",
+		"output 1.5M 1.0M +50% ▲",
+		"requests 1 1 +0%",
+		"API-equiv $ $32 $20 +60% ▲", // 1.5M*$20 + 10M*$0.20 = $32/day vs $20
+		"cache read 10.0M 0 -",
+		"models, period: opus-5-5 100%",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q in:\n%s", want, out.String())
+		}
+	}
+
+	key, err := ResolveAccount(st, "a")
+	if err != nil || key != st.AccountKey("org-a") {
+		t.Fatalf("resolve: %q %v", key, err)
+	}
+	opt.Account, opt.ByAccount = key, true
+	out.Reset()
+	if err := Compare(st, &out, opt); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "account A") {
+		t.Errorf("account scope missing:\n%s", out.String())
+	}
+	if _, err := ResolveAccount(st, "zzz"); err == nil {
+		t.Error("unknown account should fail")
+	}
+
+	// A period that runs into the future counts only days up to now.
+	if d := (Period{day("2026-10-31T00:00:00Z"), day("2026-11-03T00:00:00Z")}).Days(day("2026-11-01T12:00:00Z")); d != 1.5 {
+		t.Errorf("days so far %v", d)
+	}
+}

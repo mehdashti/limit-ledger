@@ -32,6 +32,8 @@ Usage:
   limit-ledger report weekly   [--db PATH] [--weeks N] [--by-account]
   limit-ledger report anchors  [--db PATH]
   limit-ledger report windows  [--db PATH]
+  limit-ledger report compare  --from DATE --to DATE [--vs-weeks N | --vs-from DATE --vs-to DATE]
+                               [--account NAME] [--threshold PCT] [--db PATH]
   limit-ledger accounts        [--db PATH]
   limit-ledger accounts set KEY [--label NAME] [--plan PLAN] [--db PATH]
   limit-ledger statusline install | uninstall | status
@@ -135,6 +137,7 @@ func cmdReport(which string, args []string, stdout, stderr io.Writer) error {
 	db := dbFlag(fs)
 	weeks := fs.Int("weeks", 8, "number of recent weeks (0 = all history)")
 	byAccount := fs.Bool("by-account", false, "split each week by account")
+	cmpFlags := compareFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return usageError{err.Error()}
 	}
@@ -150,6 +153,8 @@ func cmdReport(which string, args []string, stdout, stderr io.Writer) error {
 		return report.Anchors(st, stdout)
 	case "windows":
 		return report.WindowsReport(st, stdout, time.Local)
+	case "compare":
+		return cmdCompare(st, cmpFlags, stdout)
 	}
 	return usageError{"unknown report " + which}
 }
@@ -381,4 +386,97 @@ func manualSample(weekly float64, resets string, five float64, fiveResets, at st
 		}
 	}
 	return s, nil
+}
+
+type compareArgs struct {
+	from, to, vsFrom, vsTo, account *string
+	vsWeeks                         *int
+	threshold                       *float64
+}
+
+func compareFlags(fs *flag.FlagSet) compareArgs {
+	return compareArgs{
+		from:      fs.String("from", "", "compare: start date (YYYY-MM-DD, local time) or RFC 3339 time"),
+		to:        fs.String("to", "", "compare: end date, inclusive (YYYY-MM-DD) or RFC 3339 time; default now"),
+		vsFrom:    fs.String("vs-from", "", "compare: baseline start"),
+		vsTo:      fs.String("vs-to", "", "compare: baseline end, inclusive"),
+		vsWeeks:   fs.Int("vs-weeks", 0, "compare: baseline is the N weeks right before --from (default 4)"),
+		account:   fs.String("account", "", "compare: one account, by label or key (default: all usage)"),
+		threshold: fs.Float64("threshold", 20, "compare: flag changes of at least this many percent"),
+	}
+}
+
+// parseWhen reads a date (local midnight) or an RFC 3339 time. With end set, a bare
+// date means the end of that day, so --to 2026-11-05 includes the 5th.
+func parseWhen(v string, end bool, loc *time.Location) (time.Time, error) {
+	if t, err := time.ParseInLocation("2006-01-02", v, loc); err == nil {
+		if end {
+			t = t.AddDate(0, 0, 1)
+		}
+		return t, nil
+	}
+	return time.Parse(time.RFC3339, v)
+}
+
+func comparePeriods(a compareArgs, now time.Time, loc *time.Location) (cur, base report.Period, err error) {
+	if *a.from == "" {
+		return cur, base, fmt.Errorf("compare needs --from")
+	}
+	if cur.From, err = parseWhen(*a.from, false, loc); err != nil {
+		return cur, base, fmt.Errorf("--from: %v", err)
+	}
+	cur.To = now
+	if *a.to != "" {
+		if cur.To, err = parseWhen(*a.to, true, loc); err != nil {
+			return cur, base, fmt.Errorf("--to: %v", err)
+		}
+	}
+	if !cur.To.After(cur.From) {
+		return cur, base, fmt.Errorf("--to must be after --from")
+	}
+	switch {
+	case *a.vsFrom != "" || *a.vsTo != "":
+		if *a.vsWeeks != 0 {
+			return cur, base, fmt.Errorf("give either --vs-weeks or --vs-from/--vs-to")
+		}
+		if *a.vsFrom == "" || *a.vsTo == "" {
+			return cur, base, fmt.Errorf("--vs-from and --vs-to go together")
+		}
+		if base.From, err = parseWhen(*a.vsFrom, false, loc); err != nil {
+			return cur, base, fmt.Errorf("--vs-from: %v", err)
+		}
+		if base.To, err = parseWhen(*a.vsTo, true, loc); err != nil {
+			return cur, base, fmt.Errorf("--vs-to: %v", err)
+		}
+		if !base.To.After(base.From) {
+			return cur, base, fmt.Errorf("--vs-to must be after --vs-from")
+		}
+	default:
+		n := *a.vsWeeks
+		if n == 0 {
+			n = 4
+		}
+		if n < 0 {
+			return cur, base, fmt.Errorf("--vs-weeks must be positive")
+		}
+		base = report.Period{From: cur.From.AddDate(0, 0, -7*n), To: cur.From}
+	}
+	return cur, base, nil
+}
+
+func cmdCompare(st *store.Store, a compareArgs, stdout io.Writer) error {
+	now := time.Now()
+	cur, base, err := comparePeriods(a, now, time.Local)
+	if err != nil {
+		return usageError{err.Error()}
+	}
+	opt := report.CompareOptions{Period: cur, Base: base, Threshold: *a.threshold, Now: now, Loc: time.Local}
+	if *a.account != "" {
+		key, err := report.ResolveAccount(st, *a.account)
+		if err != nil {
+			return err
+		}
+		opt.Account, opt.ByAccount = key, true
+	}
+	return report.Compare(st, stdout, opt)
 }

@@ -37,6 +37,10 @@ limit-ledger accounts          # accounts seen on this machine, their stretches 
 limit-ledger accounts set KEY --label work --plan max   # name an account
 limit-ledger report weekly --by-account
 
+# daily averages of a period against the 4 weeks before it, or against another period
+limit-ledger report compare --from 2026-11-02 --to 2026-11-05 --vs-weeks 4
+limit-ledger report compare --from 2026-11-02 --vs-from 2026-10-26 --vs-to 2026-10-29 --account B
+
 limit-ledger statusline install   # record the weekly % that Claude Code shows (see below)
 limit-ledger report windows       # weekly % against local usage: API-equivalent $ and output per 1%
 limit-ledger statusline uninstall # put the previous statusline back
