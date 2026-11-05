@@ -798,7 +798,7 @@ func cmdPull(args []string, stdout, stderr io.Writer) error {
 		return usageError{err.Error()}
 	}
 	if host == "" {
-		return usageError{"pull needs a host, e.g. limit-ledger pull 192.168.1.21"}
+		return usageError{"pull needs a host, e.g. limit-ledger pull laptop.local"}
 	}
 	st, err := openExisting(*db)
 	if err != nil {

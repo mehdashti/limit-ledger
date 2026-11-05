@@ -21,7 +21,7 @@ var ErrUnreachable = errors.New("host unreachable")
 
 // PullOptions configures a pull.
 type PullOptions struct {
-	Host      string        // an ssh destination, e.g. 192.168.1.21 or a Host from ~/.ssh/config
+	Host      string        // an ssh destination, e.g. laptop.local or a Host from ~/.ssh/config
 	RemoteBin string        // limit-ledger on the other machine
 	Days      int           // how much history to fetch
 	Timeout   time.Duration // for the whole transfer
