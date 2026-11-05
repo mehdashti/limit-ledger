@@ -22,6 +22,7 @@ import (
 	"github.com/mehdashti/limit-ledger/internal/report"
 	"github.com/mehdashti/limit-ledger/internal/sample"
 	"github.com/mehdashti/limit-ledger/internal/settings"
+	"github.com/mehdashti/limit-ledger/internal/share"
 	"github.com/mehdashti/limit-ledger/internal/store"
 )
 
@@ -42,6 +43,8 @@ Usage:
   limit-ledger report fits     [--db PATH]
   limit-ledger detect          [--weeks N] [--threshold PCT] [--notify] [--quiet] [--db PATH]
   limit-ledger report alerts   [--db PATH]
+  limit-ledger export          [--weeks N] [--out DIR] [--note TEXT] [--db PATH]
+  limit-ledger community pool DIR [--markdown] [--check]
   limit-ledger statusline install | uninstall | status
   limit-ledger sample add --weekly PCT --resets TIME [--five PCT --five-resets TIME]
   limit-ledger version
@@ -85,6 +88,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cmdStatusline(args[1:], os.Stdin, stdout, stderr)
 	case "calibrate":
 		return cmdCalibrate(args[1:], stdout, stderr)
+	case "export":
+		return cmdExport(args[1:], stdout, stderr)
+	case "community":
+		return cmdCommunity(args[1:], stdout, stderr)
 	case "detect":
 		return cmdDetect(args[1:], stdout, stderr)
 	case "sample":
@@ -554,4 +561,86 @@ func cmdDetect(args []string, stdout, stderr io.Writer) error {
 		opt.Notify = notify.Send
 	}
 	return report.Detect(st, stdout, opt)
+}
+
+func cmdExport(args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("export", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	db := dbFlag(fs)
+	weeks := fs.Int("weeks", 4, "include weekly windows that reset in the last N weeks (0 = all)")
+	out := fs.String("out", ".", "directory to write the table(s) to")
+	note := fs.String("note", "", "a short note to include, for example how you use Claude Code")
+	if err := fs.Parse(args); err != nil {
+		return usageError{err.Error()}
+	}
+	st, err := openExisting(*db)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	now := time.Now()
+	since := int64(0)
+	if *weeks > 0 {
+		since = now.AddDate(0, 0, -7**weeks).UnixMilli()
+	}
+	tables, err := share.Build(st, calibrate.Options{Since: since, Now: now.UnixMilli()}, version, *note)
+	if err != nil {
+		return err
+	}
+	if len(tables) == 0 {
+		return fmt.Errorf("nothing to export: no observations in the last %d weeks (see limit-ledger calibrate)", *weeks)
+	}
+	for _, t := range tables {
+		if t.Plan == "" {
+			fmt.Fprintln(stdout, "skipped observations of accounts with no plan set: limit-ledger accounts set KEY --plan PLAN")
+			continue
+		}
+		if err := t.Validate(); err != nil {
+			return fmt.Errorf("built table does not validate: %v", err)
+		}
+		b, err := json.MarshalIndent(t, "", "  ")
+		if err != nil {
+			return err
+		}
+		path := filepath.Join(*out, fmt.Sprintf("limit-ledger-%s-%s.json", strings.ToLower(t.Plan), t.Created))
+		if err := os.WriteFile(path, append(b, '\n'), 0o644); err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "wrote %s: plan %s, %d account-weeks", path, t.Plan, len(t.Observations))
+		if t.Fit != nil {
+			fmt.Fprintf(stdout, ", own fit 1%% = %.0f units (spread %.1f%%)", t.Fit.PerPercent, t.Fit.Spread*100)
+		}
+		fmt.Fprintln(stdout)
+	}
+	fmt.Fprintln(stdout, "The file holds numbers only. Read it before you share it; see community/README.md.")
+	return nil
+}
+
+func cmdCommunity(args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 || args[0] != "pool" {
+		return usageError{"community takes pool"}
+	}
+	fs := flag.NewFlagSet("community pool", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	markdown := fs.Bool("markdown", false, "print a Markdown page (for community/TABLE.md)")
+	check := fs.Bool("check", false, "exit with an error if any file is rejected (for CI)")
+	rest := args[1:]
+	dir := "community"
+	if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") {
+		dir, rest = rest[0], rest[1:]
+	}
+	if err := fs.Parse(rest); err != nil {
+		return usageError{err.Error()}
+	}
+	tables, bad, err := share.Load(dir)
+	if err != nil {
+		return err
+	}
+	if err := report.Pool(stdout, share.Pool(tables), bad, *markdown); err != nil {
+		return err
+	}
+	if *check && len(bad) > 0 {
+		return fmt.Errorf("%d file(s) rejected", len(bad))
+	}
+	return nil
 }

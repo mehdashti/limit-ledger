@@ -5,13 +5,14 @@ utilization figures what one percent of the weekly limit is worth, and it report
 
 **Unofficial.** Not affiliated with or endorsed by Anthropic. All weights and budgets it reports are estimates.
 
-Status: early development. M1–M3 and a first M4 work:
+Status: early development. First versions of M1–M5 work:
 - reading transcripts and attributing usage to accounts;
 - weekly and limit-hit reports;
 - recording the weekly percentage (statusline hook, desktop task or by hand);
 - estimating the weights of each token kind and the cost of 1% of the weekly limit;
-- detecting changes in the weekly limit, with desktop notifications.
-Shared tables (M5) are next. See [DESIGN.md](DESIGN.md).
+- detecting changes in the weekly limit, with desktop notifications;
+- exporting a shareable table and pooling shared tables.
+See [DESIGN.md](DESIGN.md).
 
 ## Privacy
 
@@ -57,6 +58,15 @@ limit-ledger statusline install   # record the weekly % that Claude Code shows (
 limit-ledger report windows       # weekly % against local usage: API-equivalent $ and output per 1%
 limit-ledger statusline uninstall # put the previous statusline back
 ```
+
+### Sharing your table
+
+```sh
+limit-ledger export --weeks 4     # one JSON file per plan, numbers only; read it before sharing
+```
+
+See [community/README.md](community/README.md) for what the file contains and how to add it to the pooled
+[community table](community/TABLE.md).
 
 ### The statusline hook
 

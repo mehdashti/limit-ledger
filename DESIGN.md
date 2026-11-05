@@ -302,6 +302,22 @@ Implemented (schema v3):
   - the script publishes the combined table and shows where users disagree, for example by plan.
 - If relative weights differ between users or plans, that is itself a finding and is shown, not averaged away.
 
+**Implemented (v1):**
+- `limit-ledger export [--weeks N] [--out DIR] [--note TEXT]` writes `limit-ledger-<plan>-<date>.json` per plan
+  (schema version 1). It holds:
+  - the plan and the creation date;
+  - per account-week: account number (1, 2, …), reset date, highest reading and its source, and token totals
+    per kind in Opus 5.5 equivalents, rounded to thousands;
+  - the user's own best fit.
+  Tests check that no key, label, session, organization or clock time leaks into it.
+- `limit-ledger community pool DIR [--markdown] [--check]` validates every `*.json` in the folder. Unknown
+  fields, an unknown schema version or out-of-range values reject a file. It fits each plan on all shared
+  account-weeks together and shows each file's cost of 1% against the pool.
+- `community/README.md` explains how to share. `.github/ISSUE_TEMPLATE/share-table.yml` is the issue form. CI
+  rejects bad files and checks that `community/TABLE.md` is regenerated.
+- Open: pooling assumes one budget per plan across all shared weeks. Once tables span a change in the limit,
+  the pool should be split by period.
+
 ## 5. Privacy and safety rules
 
 1. Read only usage fields, model, speed, effort, timestamps and the limit-hit text. Never store or send message

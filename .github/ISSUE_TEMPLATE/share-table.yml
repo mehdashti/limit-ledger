@@ -1,0 +1,31 @@
+name: Share a weights table
+description: Add your limit-ledger table (numbers only) to the community pool.
+title: "Table: <plan>"
+labels: [community-table]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Run `limit-ledger export`, read the file, and paste it below. It must contain numbers only;
+        see community/README.md for what is in it. A maintainer adds it to the community folder.
+  - type: dropdown
+    id: plan
+    attributes:
+      label: Plan
+      options: [Pro, Max, Ultra, Team, Enterprise, Other]
+    validations:
+      required: true
+  - type: textarea
+    id: table
+    attributes:
+      label: Table (the exported JSON file)
+      render: json
+    validations:
+      required: true
+  - type: checkboxes
+    id: review
+    attributes:
+      label: Review
+      options:
+        - label: I read the file before pasting it, and I am fine with everything in it.
+          required: true

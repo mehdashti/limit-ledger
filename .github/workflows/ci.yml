@@ -27,5 +27,10 @@ jobs:
         run: go test -race ./...
       - name: build
         run: go build ./cmd/limit-ledger
+      - name: community tables
+        run: |
+          go run ./cmd/limit-ledger community pool community --check
+          go run ./cmd/limit-ledger community pool community --markdown > "$RUNNER_TEMP/TABLE.md"
+          diff -u community/TABLE.md "$RUNNER_TEMP/TABLE.md" || (echo 'community/TABLE.md is out of date: run limit-ledger community pool community --markdown > community/TABLE.md' && exit 1)
       - name: govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...

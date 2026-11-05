@@ -176,7 +176,7 @@ func Compare(st *store.Store, w io.Writer, opt CompareOptions) error {
 	tw = tabwriter.NewWriter(w, 0, 0, 2, ' ', tabwriter.AlignRight)
 	fmt.Fprintln(tw, "\tperiod\tbaseline\t")
 	for _, k := range kinds {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t\n", k, share(cur.byKind[k], cur.Dollars), share(base.byKind[k], base.Dollars))
+		fmt.Fprintf(tw, "%s\t%s\t%s\t\n", k, shareOf(cur.byKind[k], cur.Dollars), shareOf(base.byKind[k], base.Dollars))
 	}
 	if err := tw.Flush(); err != nil {
 		return err
@@ -195,7 +195,7 @@ func Compare(st *store.Store, w io.Writer, opt CompareOptions) error {
 	return nil
 }
 
-func share(part, total float64) string {
+func shareOf(part, total float64) string {
 	if total <= 0 {
 		return "-"
 	}
