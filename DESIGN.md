@@ -227,6 +227,27 @@ Implemented (schema v3):
     marked "prior-dominated".
 - **History:** every fit is stored with its date range, so the weights over time can be inspected.
 
+**Implemented (v1, schema v4), `limit-ledger calibrate`:**
+- One observation per account-week: the account's usage from the start of its window up to its highest
+  reading. Readings come from three sources:
+  - limit-hit messages (100%);
+  - switches away from an account marked `--switch-full` (100%): "I switch only at the limit". A switch
+    counts only if the account is not used again before its reset, and only if it was used in that window;
+  - samples (hook, manual or the desktop task).
+- Windows come from each account's reset schedule. It is known from a limit hit or a reading and repeats
+  weekly. Windows that start before account records exist are skipped.
+- Tokens become Opus 5.5 equivalents per kind using API price ratios between models. Only the weight of each
+  kind is fitted.
+- Fit: a grid of multipliers on the API ratios for cache writes and cache reads. Input keeps its API ratio,
+  because there is too little of it to fit, and output is the unit. The best fit is the one under which the cost
+  of 1% varies least across observations (coefficient of variation). This assumes one budget per plan across
+  the chosen weeks (`--weeks`, default 2), so a budget change inside the span shows up as a poor fit.
+- `calibrate --save` stores the best fit per plan, and `report fits` lists the history. The observation table
+  shows each week's cost of 1% under the best fit and its deviation from the mean.
+- First result (author's data): over two weeks, cache writes ≈ 0 and cache reads ≈ 0.25 × their API ratio, with
+  a spread of 3.3%. Adding the mid-October weeks gives a much worse fit (11%), which points to a different budget
+  then.
+
 ### 4.4 detect — change detection
 
 - With the current fit, predict each interval's `Δ%` from its tokens and track `observed / predicted`.

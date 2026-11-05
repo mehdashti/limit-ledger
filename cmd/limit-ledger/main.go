@@ -15,6 +15,7 @@ import (
 
 	_ "time/tzdata" // reset times name IANA zones; embed them for systems without zoneinfo
 
+	"github.com/mehdashti/limit-ledger/internal/calibrate"
 	"github.com/mehdashti/limit-ledger/internal/ingest"
 	"github.com/mehdashti/limit-ledger/internal/paths"
 	"github.com/mehdashti/limit-ledger/internal/report"
@@ -35,7 +36,9 @@ Usage:
   limit-ledger report compare  --from DATE --to DATE [--vs-weeks N | --vs-from DATE --vs-to DATE]
                                [--account NAME] [--threshold PCT] [--db PATH]
   limit-ledger accounts        [--db PATH]
-  limit-ledger accounts set KEY [--label NAME] [--plan PLAN] [--db PATH]
+  limit-ledger accounts set KEY [--label NAME] [--plan PLAN] [--switch-full] [--db PATH]
+  limit-ledger calibrate        [--weeks N] [--save] [--top N] [--db PATH]
+  limit-ledger report fits     [--db PATH]
   limit-ledger statusline install | uninstall | status
   limit-ledger sample add --weekly PCT --resets TIME [--five PCT --five-resets TIME]
   limit-ledger version
@@ -77,6 +80,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cmdReport(args[1], args[2:], stdout, stderr)
 	case "statusline":
 		return cmdStatusline(args[1:], os.Stdin, stdout, stderr)
+	case "calibrate":
+		return cmdCalibrate(args[1:], stdout, stderr)
 	case "sample":
 		return cmdSample(args[1:], stdout, stderr)
 	case "accounts":
@@ -155,6 +160,8 @@ func cmdReport(which string, args []string, stdout, stderr io.Writer) error {
 		return report.WindowsReport(st, stdout, time.Local)
 	case "compare":
 		return cmdCompare(st, cmpFlags, stdout)
+	case "fits":
+		return report.Fits(st, stdout, time.Local)
 	}
 	return usageError{"unknown report " + which}
 }
@@ -176,6 +183,7 @@ func cmdAccounts(args []string, stdout, stderr io.Writer) error {
 	db := dbFlag(fs)
 	label := fs.String("label", "", "a name for the account")
 	plan := fs.String("plan", "", "the account's plan, for example pro, max, ultra, team")
+	switchFull := fs.Bool("switch-full", false, "you switch away from this account only at its weekly limit (use --switch-full=false to undo)")
 	// Accept the key before or after the flags.
 	var key string
 	if setMode && len(args) > 0 && !strings.HasPrefix(args[0], "-") {
@@ -199,18 +207,21 @@ func cmdAccounts(args []string, stdout, stderr io.Writer) error {
 		return usageError{"accounts set needs an account key"}
 	}
 	var lp, pp *string
+	var sp *bool
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "label":
 			lp = label
 		case "plan":
 			pp = plan
+		case "switch-full":
+			sp = switchFull
 		}
 	})
-	if lp == nil && pp == nil {
-		return usageError{"accounts set needs --label and/or --plan"}
+	if lp == nil && pp == nil && sp == nil {
+		return usageError{"accounts set needs --label, --plan and/or --switch-full"}
 	}
-	full, err := st.SetAccount(key, lp, pp)
+	full, err := st.SetAccountPolicy(key, lp, pp, sp)
 	if err != nil {
 		return err
 	}
@@ -479,4 +490,30 @@ func cmdCompare(st *store.Store, a compareArgs, stdout io.Writer) error {
 		opt.Account, opt.ByAccount = key, true
 	}
 	return report.Compare(st, stdout, opt)
+}
+
+func cmdCalibrate(args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("calibrate", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	db := dbFlag(fs)
+	weeks := fs.Int("weeks", 2, "use weekly windows that reset in the last N weeks (0 = all)")
+	save := fs.Bool("save", false, "save the best fit of each plan")
+	top := fs.Int("top", 5, "how many best fits to show")
+	if err := fs.Parse(args); err != nil {
+		return usageError{err.Error()}
+	}
+	st, err := openExisting(*db)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	now := time.Now()
+	since := int64(0)
+	if *weeks > 0 {
+		since = now.AddDate(0, 0, -7**weeks).UnixMilli()
+	}
+	return report.Calibrate(st, stdout, report.CalibrateOptions{
+		Options: calibrate.Options{Since: since, Now: now.UnixMilli()},
+		Save:    *save, Top: *top, Loc: time.Local,
+	})
 }

@@ -72,6 +72,9 @@ type Account struct {
 	Key, Label, Plan string
 	Events           int
 	First, Last      int64
+	// SwitchFull says the user switches away from this account only when its weekly
+	// limit is (nearly) used up, so a switch counts as a 100% reading.
+	SwitchFull bool
 }
 
 // Name is the label if one is set, else the key.
@@ -85,7 +88,7 @@ func (a Account) Name() string {
 // Accounts lists the known accounts in the order they were first seen.
 func (s *Store) Accounts() ([]Account, error) {
 	rows, err := s.db.Query(`SELECT a.account, a.label, a.plan, count(e.ts), coalesce(min(e.ts), 0),
-		coalesce(max(e.ts), 0) FROM accounts a LEFT JOIN org_events e ON e.account = a.account
+		coalesce(max(e.ts), 0), a.switch_full FROM accounts a LEFT JOIN org_events e ON e.account = a.account
 		GROUP BY a.account ORDER BY 5`)
 	if err != nil {
 		return nil, err
@@ -94,7 +97,7 @@ func (s *Store) Accounts() ([]Account, error) {
 	var out []Account
 	for rows.Next() {
 		var a Account
-		if err := rows.Scan(&a.Key, &a.Label, &a.Plan, &a.Events, &a.First, &a.Last); err != nil {
+		if err := rows.Scan(&a.Key, &a.Label, &a.Plan, &a.Events, &a.First, &a.Last, &a.SwitchFull); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -105,10 +108,17 @@ func (s *Store) Accounts() ([]Account, error) {
 // SetAccount sets the label and/or plan of the one account whose key starts with
 // prefix. A nil value is left unchanged.
 func (s *Store) SetAccount(prefix string, label, plan *string) (string, error) {
+	return s.SetAccountPolicy(prefix, label, plan, nil)
+}
+
+// SetAccountPolicy is SetAccount with the switch policy as well.
+func (s *Store) SetAccountPolicy(prefix string, label, plan *string, switchFull *bool) (string, error) {
 	if prefix == "" {
 		return "", fmt.Errorf("empty account key")
 	}
-	rows, err := s.db.Query(`SELECT account FROM accounts WHERE substr(account, 1, ?) = ?`, len(prefix), prefix)
+	// prefix is the start of a key, or a label (case-insensitive).
+	rows, err := s.db.Query(`SELECT account FROM accounts WHERE substr(account, 1, ?) = ?
+		OR (label != '' AND lower(label) = lower(?))`, len(prefix), prefix, prefix)
 	if err != nil {
 		return "", err
 	}
@@ -130,10 +140,71 @@ func (s *Store) SetAccount(prefix string, label, plan *string) (string, error) {
 		return "", fmt.Errorf("%q matches %d accounts; give more of the key", prefix, len(keys))
 	}
 	var res sql.Result
-	res, err = s.db.Exec(`UPDATE accounts SET label = coalesce(?, label), plan = coalesce(?, plan)
-		WHERE account = ?`, label, plan, keys[0])
+	res, err = s.db.Exec(`UPDATE accounts SET label = coalesce(?, label), plan = coalesce(?, plan),
+		switch_full = coalesce(?, switch_full) WHERE account = ?`, label, plan, switchFull, keys[0])
 	if err == nil {
 		_, err = res.RowsAffected()
 	}
 	return keys[0], err
+}
+
+// AccountTotals sums one account's usage in [from, to) along the timeline.
+func (s *Store) AccountTotals(segs []Segment, acct string, from, to int64) ([]Group, error) {
+	var out []Group
+	for _, sg := range segs {
+		if sg.Account != acct {
+			continue
+		}
+		a, b := max(from, sg.Start), min(to, sg.End)
+		if a >= b {
+			continue
+		}
+		g, err := s.Totals(a, b)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, g...)
+	}
+	return out, nil
+}
+
+// Fit is one saved estimate of the subscription weights for a plan. Weights are
+// relative to one Opus 5.5 output token; PerPercent is how many such units one
+// percent of the weekly limit was worth; Spread is the relative spread of that
+// figure across the observations (lower is a better fit).
+type Fit struct {
+	TS                                   int64
+	Plan                                 string
+	SinceTS                              int64
+	Observations                         int
+	Input, CacheWrite, CacheRead, Output float64
+	PerPercent, Spread                   float64
+}
+
+// SaveFit stores a fit.
+func (s *Store) SaveFit(f Fit) error {
+	_, err := s.db.Exec(`INSERT OR REPLACE INTO fits(ts, plan, since_ts, observations, w_input, w_cache_write,
+		w_cache_read, w_output, per_percent, spread) VALUES(?,?,?,?,?,?,?,?,?,?)`, f.TS, f.Plan, f.SinceTS,
+		f.Observations, f.Input, f.CacheWrite, f.CacheRead, f.Output, f.PerPercent, f.Spread)
+	return err
+}
+
+// Fits returns the saved fits, oldest first.
+func (s *Store) Fits() ([]Fit, error) {
+	rows, err := s.db.Query(`SELECT ts, plan, since_ts, observations, w_input, w_cache_write, w_cache_read,
+		w_output, per_percent, spread FROM fits ORDER BY ts, plan`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Fit
+	for rows.Next() {
+		var f Fit
+		if err := rows.Scan(&f.TS, &f.Plan, &f.SinceTS, &f.Observations, &f.Input, &f.CacheWrite, &f.CacheRead,
+			&f.Output, &f.PerPercent, &f.Spread); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
 }

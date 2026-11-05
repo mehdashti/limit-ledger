@@ -18,7 +18,26 @@ import (
 )
 
 // migrations[i] takes the schema from version i to i+1.
-var migrations = []string{schemaV1, schemaV2, schemaV3}
+var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4}
+
+// schemaV4 adds the per-account switch policy and the history of weight fits.
+const schemaV4 = `
+ALTER TABLE accounts ADD COLUMN switch_full INTEGER NOT NULL DEFAULT 0;
+
+CREATE TABLE fits (
+	ts           INTEGER NOT NULL,
+	plan         TEXT NOT NULL,
+	since_ts     INTEGER NOT NULL,
+	observations INTEGER NOT NULL,
+	w_input      REAL NOT NULL,
+	w_cache_write REAL NOT NULL,
+	w_cache_read REAL NOT NULL,
+	w_output     REAL NOT NULL,
+	per_percent  REAL NOT NULL,
+	spread       REAL NOT NULL,
+	PRIMARY KEY (ts, plan)
+) WITHOUT ROWID;
+`
 
 // schemaV3 adds utilization samples from the statusline hook.
 const schemaV3 = `

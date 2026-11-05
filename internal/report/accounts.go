@@ -144,13 +144,17 @@ func Accounts(st *store.Store, w io.Writer) error {
 		nseg[sg.Account]++
 	}
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "key\tlabel\tplan\tfirst seen\tlast seen\tstretches\tweekly hits\treset schedule (UTC)")
+	fmt.Fprintln(tw, "key\tlabel\tplan\tswitch\tfirst seen\tlast seen\tstretches\tweekly hits\treset schedule (UTC)")
 	for _, a := range accts {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\t%d\t%s\n", a.Key, dash(a.Label), dash(a.Plan),
+		sw := "-"
+		if a.SwitchFull {
+			sw = "at limit"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%d\t%s\n", a.Key, dash(a.Label), dash(a.Plan), sw,
 			stamp(a.First), stamp(a.Last), nseg[a.Key], nhits[a.Key], schedules(sched[a.Key]))
 	}
 	if n := nhits[""]; n > 0 {
-		fmt.Fprintf(tw, "%s\t\t\t\t\t\t%d\t%s\n", unknownAccount, n, schedules(sched[""]))
+		fmt.Fprintf(tw, "%s\t\t\t\t\t\t\t%d\t%s\n", unknownAccount, n, schedules(sched[""]))
 	}
 	if err := tw.Flush(); err != nil {
 		return err
